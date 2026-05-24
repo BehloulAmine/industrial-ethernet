@@ -1,0 +1,10 @@
+/* Phase 1: Ethernet is already enabled in the board DTS.
+ * This overlay is a placeholder for future partition layout and peripheral config.
+ */
+
+/ {
+	chosen {
+		zephyr,console = &usart1;
+		zephyr,shell-uart = &usart1;
+	};
+};
