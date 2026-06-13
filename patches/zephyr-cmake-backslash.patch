@@ -1,6 +1,8 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c0cbd8e5989..609c5b166f5 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -635,7 +635,8 @@ if(CONFIG_BUILD_OUTPUT_STRIP_PATHS)
+@@ -634,7 +634,8 @@ if(CONFIG_BUILD_OUTPUT_STRIP_PATHS)
    zephyr_cc_option(-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=CMAKE_SOURCE_DIR)
    zephyr_cc_option(-fmacro-prefix-map=${ZEPHYR_BASE}=ZEPHYR_BASE)
    if(WEST_TOPDIR)
@@ -9,3 +11,4 @@
 +    zephyr_cc_option(-fmacro-prefix-map=${WEST_TOPDIR_FWD}=WEST_TOPDIR)
    endif()
  endif()
+ 

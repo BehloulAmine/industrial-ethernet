@@ -6,5 +6,31 @@
 	chosen {
 		zephyr,console = &usart1;
 		zephyr,shell-uart = &usart1;
+		zephyr,settings-partition = &storage_partition;
+	};
+};
+
+&flash0 {
+	partitions {
+		/delete-node/ partition@ff800;
+	};
+};
+
+/* Store settings in the external QSPI NOR so the full internal flash0 remains
+ * available for the M7 application image.
+ */
+&mt25ql512ab1 {
+	partitions {
+		/delete-node/ partition@0;
+
+		storage_partition: partition@0 {
+			label = "storage";
+			reg = <0x00000000 DT_SIZE_K(16)>;
+		};
+
+		external_flash_partition: partition@4000 {
+			label = "external-flash";
+			reg = <0x00004000 (DT_SIZE_M(64) - DT_SIZE_K(16))>;
+		};
 	};
 };
