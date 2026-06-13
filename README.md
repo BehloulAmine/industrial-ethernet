@@ -277,6 +277,27 @@ rg -n -C 4 'zephyr,settings-partition|storage_partition|qspi-nor-flash@0' build/
 rg -n 'CONFIG_NVS=|CONFIG_SETTINGS_NVS|CONFIG_FLASH_STM32_QSPI|CONFIG_SETTINGS_FCB' build/zephyr/.config
 ```
 
+## Modbus TCP
+
+L'application lance un serveur Modbus TCP sur le port standard `502`.
+
+- Unit ID : `1`
+- Holding registers : adresses `0..31`
+- Input registers : adresses `0..15`
+- FC03, FC04, FC06 et FC16 : supportes par la stack serveur Modbus Zephyr via callbacks applicatifs
+- FC23 : ajoute dans l'application comme function code custom `0x17`
+
+Mapping de depart :
+
+Les adresses Modbus sont centralisees dans `app/src/modbus_map.h`.
+
+Exemple avec `mbpoll` depuis le PC :
+
+```bash
+mbpoll -m tcp -a 1 -r 1 -c 2 <IP_DE_LA_CARTE>
+mbpoll -m tcp -a 1 -r 2 -t 4:int -1 1234 <IP_DE_LA_CARTE>
+```
+
 ## Structure du projet
 
 ```

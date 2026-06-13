@@ -12,6 +12,7 @@
 #include <zephyr/settings/settings.h>
 #include <zephyr/logging/log.h>
 
+#include "app_modbus_tcp.h"
 #include "net_cfg.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
@@ -88,8 +89,14 @@ int main(void)
 		LOG_ERR("net_cfg_apply failed: %d", ret);
 	}
 
+	ret = app_modbus_tcp_start();
+	if (ret < 0) {
+		LOG_ERR("app_modbus_tcp_start failed: %d", ret);
+	}
+
 	while (1) {
 		gpio_pin_toggle_dt(&led);
+		app_modbus_tcp_heartbeat_tick();
 		k_msleep(500);
 	}
 

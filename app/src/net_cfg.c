@@ -24,18 +24,6 @@ LOG_MODULE_REGISTER(net_cfg, LOG_LEVEL_INF);
 #define NET_CFG_STORE_MAGIC  0x4e455443U
 #define NET_CFG_STORE_VER    1U
 
-enum net_cfg_mode {
-	NET_CFG_DHCP = 0,
-	NET_CFG_STATIC = 1,
-};
-
-struct net_cfg {
-	enum net_cfg_mode mode;
-	char ip[16];
-	char mask[16];
-	char gw[16];
-};
-
 struct net_cfg_store {
 	uint32_t magic;
 	uint8_t version;
@@ -45,7 +33,7 @@ struct net_cfg_store {
 	char gw[16];
 };
 
-static struct net_cfg cfg = {
+static struct net_cfg_data cfg = {
 	.mode = NET_CFG_DHCP,
 	.ip = NET_CFG_DEFAULT_IP,
 	.mask = NET_CFG_DEFAULT_MASK,
@@ -89,6 +77,33 @@ static int net_cfg_save(void)
 	snprintk(store.gw, sizeof(store.gw), "%s", cfg.gw);
 
 	return settings_save_one(NET_CFG_STORE_KEY, &store, sizeof(store));
+}
+
+static void net_cfg_copy(struct net_cfg_data *dst, const struct net_cfg_data *src)
+{
+	dst->mode = src->mode;
+	snprintk(dst->ip, sizeof(dst->ip), "%s", src->ip);
+	snprintk(dst->mask, sizeof(dst->mask), "%s", src->mask);
+	snprintk(dst->gw, sizeof(dst->gw), "%s", src->gw);
+}
+
+static int net_cfg_validate(const struct net_cfg_data *data)
+{
+	if (!data) {
+		return -EINVAL;
+	}
+
+	if (data->mode != NET_CFG_DHCP && data->mode != NET_CFG_STATIC) {
+		return -EINVAL;
+	}
+
+	if (!net_cfg_is_ipv4_string(data->ip) ||
+	    !net_cfg_is_ipv4_string(data->mask) ||
+	    !net_cfg_is_ipv4_string(data->gw)) {
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 static int net_cfg_load_string(const char *name, char *dst, size_t dst_size)
@@ -276,6 +291,102 @@ int net_cfg_apply(struct net_if *iface)
 	}
 
 	return 0;
+}
+
+int net_cfg_get_saved(struct net_cfg_data *out)
+{
+	if (!out) {
+		return -EINVAL;
+	}
+
+	net_cfg_copy(out, &cfg);
+	return 0;
+}
+
+int net_cfg_set_saved(const struct net_cfg_data *in)
+{
+	int ret;
+
+	ret = net_cfg_validate(in);
+	if (ret < 0) {
+		return ret;
+	}
+
+	net_cfg_copy(&cfg, in);
+	return net_cfg_save();
+}
+
+int net_cfg_get_active(struct net_cfg_data *out)
+{
+	struct net_if *iface;
+	struct net_if_config *if_cfg;
+	struct net_in_addr netmask;
+	struct net_in_addr gw;
+	struct net_if_addr *selected = NULL;
+	enum net_cfg_mode mode = cfg.mode;
+
+	if (!out) {
+		return -EINVAL;
+	}
+
+	net_cfg_copy(out, &cfg);
+
+	iface = net_if_get_default();
+	if (!iface) {
+		return -ENODEV;
+	}
+
+	if_cfg = net_if_get_config(iface);
+	if (!if_cfg || !if_cfg->ip.ipv4) {
+		return -ENODATA;
+	}
+
+	for (int i = 0; i < NET_IF_MAX_IPV4_ADDR; i++) {
+		struct net_if_addr *ifaddr = &if_cfg->ip.ipv4->unicast[i].ipv4;
+
+		if (!ifaddr->is_used) {
+			continue;
+		}
+
+		if (ifaddr->addr_type == NET_ADDR_DHCP) {
+			selected = ifaddr;
+			mode = NET_CFG_DHCP;
+			break;
+		}
+
+		if (!selected && ifaddr->addr_type == NET_ADDR_MANUAL) {
+			selected = ifaddr;
+			mode = NET_CFG_STATIC;
+		}
+	}
+
+	out->mode = mode;
+
+	if (!selected) {
+		snprintk(out->ip, sizeof(out->ip), "%s", "0.0.0.0");
+		snprintk(out->mask, sizeof(out->mask), "%s", "0.0.0.0");
+		snprintk(out->gw, sizeof(out->gw), "%s", "0.0.0.0");
+		return 0;
+	}
+
+	net_addr_ntop(AF_INET, &selected->address.in_addr, out->ip, sizeof(out->ip));
+	netmask = net_if_ipv4_get_netmask_by_addr(iface, &selected->address.in_addr);
+	gw = net_if_ipv4_get_gw(iface);
+	net_addr_ntop(AF_INET, &netmask, out->mask, sizeof(out->mask));
+	net_addr_ntop(AF_INET, &gw, out->gw, sizeof(out->gw));
+
+	return 0;
+}
+
+bool net_cfg_link_is_up(void)
+{
+	struct net_if *iface = net_if_get_default();
+
+	if (!iface) {
+		return false;
+	}
+
+	return net_if_is_up(iface) && net_if_is_carrier_ok(iface);
 }
 
 static int cmd_net_cfg_show(const struct shell *sh, size_t argc, char **argv)
