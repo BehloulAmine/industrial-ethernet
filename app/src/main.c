@@ -84,9 +84,9 @@ int main(void)
 		return -1;
 	}
 
-	ret = net_cfg_apply(iface);
+	ret = net_cfg_start(iface);
 	if (ret < 0) {
-		LOG_ERR("net_cfg_apply failed: %d", ret);
+		LOG_ERR("net_cfg_start failed: %d", ret);
 	}
 
 	ret = app_modbus_tcp_start();

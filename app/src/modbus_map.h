@@ -36,6 +36,5 @@
 
 #define APP_MB_CMD_NONE 0
 #define APP_MB_CMD_SAVE 1
-#define APP_MB_CMD_SAVE_APPLY 2
 
 #endif /* MODBUS_MAP_H_ */

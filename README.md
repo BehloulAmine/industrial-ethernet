@@ -291,6 +291,11 @@ Mapping de depart :
 
 Les adresses Modbus sont centralisees dans `app/src/modbus_map.h`.
 
+La configuration IP est appliquee uniquement au demarrage. Depuis le shell `ip ...` ou depuis
+Modbus, une modification sauvegarde la nouvelle configuration en flash, puis il faut redemarrer
+la carte pour l'activer. Cote Modbus, `HR8 = 1` sauvegarde la configuration preparee dans les
+holding registers; `HR9 = 0` indique que la sauvegarde a reussi.
+
 Exemple avec `mbpoll` depuis le PC :
 
 ```bash

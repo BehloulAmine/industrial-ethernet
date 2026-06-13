@@ -193,15 +193,17 @@ def run(device_ip, subnet, target_mac, target_oui):
         store=False,
     )
 
-    time.sleep(1)
-
     if dhcp_state:
         print(f"Verifying connectivity -> ping {device_ip} ...")
-        response = os.system(f"ping -n 1 {device_ip}")
-        if response == 0:
-            print(f"\n[OK] DHCP OK - board is reachable at {device_ip}")
+        for attempt in range(1, 6):
+            time.sleep(1)
+            response = os.system(f"ping -n 1 {device_ip}")
+            if response == 0:
+                print(f"\n[OK] DHCP OK - board is reachable at {device_ip}")
+                break
+            print(f"[WAIT] Ping attempt {attempt}/5 failed")
         else:
-            print(f"\n[FAIL] Board not responding to ping (may need more time or a reboot)")
+            print(f"\n[FAIL] Board not responding to ping")
     else:
         print("[FAIL] DHCP exchange did not complete (timeout)")
 

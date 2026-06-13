@@ -7,8 +7,6 @@
 #include <zephyr/settings/settings.h>
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_ip.h>
-#include <zephyr/net/net_event.h>
-#include <zephyr/net/net_mgmt.h>
 #include <zephyr/net/dhcpv4.h>
 #include <zephyr/logging/log.h>
 #include <errno.h>
@@ -40,6 +38,16 @@ static struct net_cfg_data cfg = {
 	.gw = NET_CFG_DEFAULT_GW,
 };
 
+static K_MUTEX_DEFINE(cfg_lock);
+static net_cfg_change_cb_t change_cb;
+
+static void net_cfg_notify_changed(void)
+{
+	if (change_cb) {
+		change_cb();
+	}
+}
+
 static void net_cfg_restore_defaults(void)
 {
 	cfg.mode = NET_CFG_DHCP;
@@ -64,17 +72,17 @@ static bool net_cfg_store_is_valid(const struct net_cfg_store *store)
 	       net_cfg_is_ipv4_string(store->gw);
 }
 
-static int net_cfg_save(void)
+static int net_cfg_save(const struct net_cfg_data *data)
 {
 	struct net_cfg_store store = {
 		.magic = NET_CFG_STORE_MAGIC,
 		.version = NET_CFG_STORE_VER,
-		.mode = cfg.mode,
+		.mode = data->mode,
 	};
 
-	snprintk(store.ip, sizeof(store.ip), "%s", cfg.ip);
-	snprintk(store.mask, sizeof(store.mask), "%s", cfg.mask);
-	snprintk(store.gw, sizeof(store.gw), "%s", cfg.gw);
+	snprintk(store.ip, sizeof(store.ip), "%s", data->ip);
+	snprintk(store.mask, sizeof(store.mask), "%s", data->mask);
+	snprintk(store.gw, sizeof(store.gw), "%s", data->gw);
 
 	return settings_save_one(NET_CFG_STORE_KEY, &store, sizeof(store));
 }
@@ -125,36 +133,6 @@ static int net_cfg_load_string(const char *name, char *dst, size_t dst_size)
 	return 0;
 }
 
-static void net_cfg_remove_other_ipv4_addrs(struct net_if *iface,
-					    const struct in_addr *keep)
-{
-	struct net_if_config *if_cfg = net_if_get_config(iface);
-
-	for (int i = 0; i < NET_IF_MAX_IPV4_ADDR; i++) {
-		struct net_if_addr *ifaddr = &if_cfg->ip.ipv4->unicast[i].ipv4;
-
-		if (!ifaddr->is_used ||
-		    net_ipv4_addr_cmp(&ifaddr->address.in_addr, keep)) {
-			continue;
-		}
-
-		net_if_ipv4_addr_rm(iface, &ifaddr->address.in_addr);
-	}
-}
-
-static void net_cfg_remove_manual_ipv4_addrs(struct net_if *iface)
-{
-	struct net_if_config *if_cfg = net_if_get_config(iface);
-
-	for (int i = 0; i < NET_IF_MAX_IPV4_ADDR; i++) {
-		struct net_if_addr *ifaddr = &if_cfg->ip.ipv4->unicast[i].ipv4;
-
-		if (ifaddr->is_used && ifaddr->addr_type == NET_ADDR_MANUAL) {
-			net_if_ipv4_addr_rm(iface, &ifaddr->address.in_addr);
-		}
-	}
-}
-
 int net_cfg_load(void)
 {
 	struct net_cfg_store store;
@@ -175,7 +153,7 @@ int net_cfg_load(void)
 		LOG_ERR("Invalid persisted config blob, restoring defaults");
 		net_cfg_restore_defaults();
 
-		ret = net_cfg_save();
+		ret = net_cfg_save(&cfg);
 		if (ret < 0) {
 			LOG_ERR("Failed to save default config: %d", ret);
 			return ret;
@@ -218,7 +196,7 @@ int net_cfg_load(void)
 		net_cfg_restore_defaults();
 	}
 
-	ret = net_cfg_save();
+	ret = net_cfg_save(&cfg);
 	if (ret < 0) {
 		LOG_ERR("Failed to migrate config: %d", ret);
 		return ret;
@@ -234,8 +212,12 @@ loaded:
 	return 0;
 }
 
-int net_cfg_apply(struct net_if *iface)
+int net_cfg_start(struct net_if *iface)
 {
+	struct net_cfg_data active_cfg;
+
+	net_cfg_get_saved(&active_cfg);
+
 	if (!iface) {
 		iface = net_if_get_default();
 	}
@@ -244,48 +226,38 @@ int net_cfg_apply(struct net_if *iface)
 		return -ENODEV;
 	}
 
-	if (cfg.mode == NET_CFG_STATIC) {
+	if (active_cfg.mode == NET_CFG_STATIC) {
 		struct in_addr addr, mask, gw;
 		struct net_if_addr *ifaddr;
-		struct net_if *found_iface;
 
-		net_dhcpv4_stop(iface);
-
-		if (net_addr_pton(AF_INET, cfg.ip, &addr) < 0) {
-			LOG_ERR("Invalid IP: %s", cfg.ip);
+		if (net_addr_pton(AF_INET, active_cfg.ip, &addr) < 0) {
+			LOG_ERR("Invalid IP: %s", active_cfg.ip);
 			return -EINVAL;
 		}
-		if (net_addr_pton(AF_INET, cfg.mask, &mask) < 0) {
-			LOG_ERR("Invalid mask: %s", cfg.mask);
+		if (net_addr_pton(AF_INET, active_cfg.mask, &mask) < 0) {
+			LOG_ERR("Invalid mask: %s", active_cfg.mask);
 			return -EINVAL;
 		}
-		if (net_addr_pton(AF_INET, cfg.gw, &gw) < 0) {
-			LOG_ERR("Invalid gateway: %s", cfg.gw);
+		if (net_addr_pton(AF_INET, active_cfg.gw, &gw) < 0) {
+			LOG_ERR("Invalid gateway: %s", active_cfg.gw);
 			return -EINVAL;
 		}
 
-		found_iface = NULL;
-		ifaddr = net_if_ipv4_addr_lookup(&addr, &found_iface);
-		if (!ifaddr || found_iface != iface) {
-			ifaddr = net_if_ipv4_addr_add(iface, &addr, NET_ADDR_MANUAL, 0);
-		}
+		ifaddr = net_if_ipv4_addr_add(iface, &addr, NET_ADDR_MANUAL, 0);
 		if (!ifaddr) {
-			LOG_ERR("Failed to add static IP address: %s", cfg.ip);
+			LOG_ERR("Failed to add static IP address: %s", active_cfg.ip);
 			return -ENOSPC;
 		}
 
 		if (!net_if_ipv4_set_netmask_by_addr(iface, &addr, &mask)) {
-			LOG_ERR("Failed to set netmask: %s", cfg.mask);
+			LOG_ERR("Failed to set netmask: %s", active_cfg.mask);
 			return -EIO;
 		}
 		net_if_ipv4_set_gw(iface, &gw);
 
-		net_cfg_remove_other_ipv4_addrs(iface, &addr);
-		net_mgmt_event_notify_with_info(NET_EVENT_IPV4_ADDR_ADD, iface,
-						&addr, sizeof(addr));
-		LOG_INF("Static IP configured: %s / %s gw %s", cfg.ip, cfg.mask, cfg.gw);
+		LOG_INF("Static IP configured: %s / %s gw %s",
+			active_cfg.ip, active_cfg.mask, active_cfg.gw);
 	} else {
-		net_cfg_remove_manual_ipv4_addrs(iface);
 		net_dhcpv4_start(iface);
 		LOG_INF("DHCP client started, waiting for lease...");
 	}
@@ -299,7 +271,9 @@ int net_cfg_get_saved(struct net_cfg_data *out)
 		return -EINVAL;
 	}
 
+	k_mutex_lock(&cfg_lock, K_FOREVER);
 	net_cfg_copy(out, &cfg);
+	k_mutex_unlock(&cfg_lock);
 	return 0;
 }
 
@@ -312,8 +286,22 @@ int net_cfg_set_saved(const struct net_cfg_data *in)
 		return ret;
 	}
 
+	ret = net_cfg_save(in);
+	if (ret < 0) {
+		return ret;
+	}
+
+	k_mutex_lock(&cfg_lock, K_FOREVER);
 	net_cfg_copy(&cfg, in);
-	return net_cfg_save();
+	k_mutex_unlock(&cfg_lock);
+
+	net_cfg_notify_changed();
+	return 0;
+}
+
+void net_cfg_register_change_cb(net_cfg_change_cb_t cb)
+{
+	change_cb = cb;
 }
 
 int net_cfg_get_active(struct net_cfg_data *out)
@@ -323,13 +311,14 @@ int net_cfg_get_active(struct net_cfg_data *out)
 	struct net_in_addr netmask;
 	struct net_in_addr gw;
 	struct net_if_addr *selected = NULL;
-	enum net_cfg_mode mode = cfg.mode;
+	enum net_cfg_mode mode;
 
 	if (!out) {
 		return -EINVAL;
 	}
 
-	net_cfg_copy(out, &cfg);
+	net_cfg_get_saved(out);
+	mode = out->mode;
 
 	iface = net_if_get_default();
 	if (!iface) {
@@ -391,36 +380,44 @@ bool net_cfg_link_is_up(void)
 
 static int cmd_net_cfg_show(const struct shell *sh, size_t argc, char **argv)
 {
+	struct net_cfg_data saved;
+
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
 
-	shell_print(sh, "Mode    : %s", cfg.mode == NET_CFG_DHCP ? "dhcp" : "static");
-	shell_print(sh, "IP      : %s", cfg.ip);
-	shell_print(sh, "Netmask : %s", cfg.mask);
-	shell_print(sh, "Gateway : %s", cfg.gw);
+	net_cfg_get_saved(&saved);
+
+	shell_print(sh, "Mode    : %s", saved.mode == NET_CFG_DHCP ? "dhcp" : "static");
+	shell_print(sh, "IP      : %s", saved.ip);
+	shell_print(sh, "Netmask : %s", saved.mask);
+	shell_print(sh, "Gateway : %s", saved.gw);
 	return 0;
 }
 
 static int cmd_net_cfg_dhcp(const struct shell *sh, size_t argc, char **argv)
 {
+	struct net_cfg_data saved;
 	int ret;
 
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
 
-	cfg.mode = NET_CFG_DHCP;
-	ret = net_cfg_save();
+	net_cfg_get_saved(&saved);
+	saved.mode = NET_CFG_DHCP;
+
+	ret = net_cfg_set_saved(&saved);
 	if (ret < 0) {
 		shell_error(sh, "Failed to save config: %d", ret);
 		return ret;
 	}
 
-	shell_print(sh, "Mode set to DHCP. Reboot or run 'ip apply' to activate.");
+	shell_print(sh, "Mode set to DHCP. Reboot to activate.");
 	return 0;
 }
 
 static int cmd_net_cfg_static(const struct shell *sh, size_t argc, char **argv)
 {
+	struct net_cfg_data saved;
 	struct in_addr tmp;
 	int ret;
 
@@ -434,14 +431,16 @@ static int cmd_net_cfg_static(const struct shell *sh, size_t argc, char **argv)
 		shell_error(sh, "Invalid IP address: %s", argv[1]);
 		return -EINVAL;
 	}
-	snprintk(cfg.ip, sizeof(cfg.ip), "%s", argv[1]);
+
+	net_cfg_get_saved(&saved);
+	snprintk(saved.ip, sizeof(saved.ip), "%s", argv[1]);
 
 	if (argc >= 3) {
 		if (net_addr_pton(AF_INET, argv[2], &tmp) < 0) {
 			shell_error(sh, "Invalid netmask: %s", argv[2]);
 			return -EINVAL;
 		}
-		snprintk(cfg.mask, sizeof(cfg.mask), "%s", argv[2]);
+		snprintk(saved.mask, sizeof(saved.mask), "%s", argv[2]);
 	}
 
 	if (argc >= 4) {
@@ -449,35 +448,18 @@ static int cmd_net_cfg_static(const struct shell *sh, size_t argc, char **argv)
 			shell_error(sh, "Invalid gateway: %s", argv[3]);
 			return -EINVAL;
 		}
-		snprintk(cfg.gw, sizeof(cfg.gw), "%s", argv[3]);
+		snprintk(saved.gw, sizeof(saved.gw), "%s", argv[3]);
 	}
 
-	cfg.mode = NET_CFG_STATIC;
-	ret = net_cfg_save();
+	saved.mode = NET_CFG_STATIC;
+	ret = net_cfg_set_saved(&saved);
 	if (ret < 0) {
 		shell_error(sh, "Failed to save config: %d", ret);
 		return ret;
 	}
 
-	shell_print(sh, "Static IP saved: %s / %s gw %s", cfg.ip, cfg.mask, cfg.gw);
-	shell_print(sh, "Reboot or run 'ip apply' to activate.");
-	return 0;
-}
-
-static int cmd_net_cfg_apply(const struct shell *sh, size_t argc, char **argv)
-{
-	int ret;
-
-	ARG_UNUSED(argc);
-	ARG_UNUSED(argv);
-
-	ret = net_cfg_apply(NULL);
-	if (ret < 0) {
-		shell_error(sh, "Failed to apply config: %d", ret);
-		return ret;
-	}
-
-	shell_print(sh, "Configuration applied.");
+	shell_print(sh, "Static IP saved: %s / %s gw %s", saved.ip, saved.mask, saved.gw);
+	shell_print(sh, "Reboot to activate.");
 	return 0;
 }
 
@@ -485,7 +467,6 @@ SHELL_STATIC_SUBCMD_SET_CREATE(net_cfg_cmds,
 	SHELL_CMD(show, NULL, "Show current network config", cmd_net_cfg_show),
 	SHELL_CMD(dhcp, NULL, "Switch to DHCP mode", cmd_net_cfg_dhcp),
 	SHELL_CMD(static, NULL, "Set static IP: static <ip> [mask] [gw]", cmd_net_cfg_static),
-	SHELL_CMD(apply, NULL, "Apply config without reboot", cmd_net_cfg_apply),
 	SHELL_SUBCMD_SET_END
 );
 

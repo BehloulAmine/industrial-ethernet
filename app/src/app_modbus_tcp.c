@@ -25,10 +25,14 @@ LOG_MODULE_REGISTER(app_modbus_tcp, LOG_LEVEL_INF);
 #define APP_MODBUS_UNIT_ID 1
 #define APP_MODBUS_THREAD_STACK_SIZE 4096
 #define APP_MODBUS_THREAD_PRIORITY 7
+#define APP_MODBUS_CMD_WORKQ_STACK_SIZE 3072
+#define APP_MODBUS_CMD_WORKQ_PRIORITY 8
 
 #define APP_MODBUS_FC23_READ_WRITE_REGS 0x17
 #define APP_MODBUS_TCP_BACKLOG 2
-#define APP_MODBUS_RAW_TIMEOUT_MS 1000
+#define APP_MODBUS_CMD_TIMEOUT_MS 5000
+#define APP_MODBUS_RAW_TIMEOUT_MS (APP_MODBUS_CMD_TIMEOUT_MS + 1000)
+#define APP_MODBUS_STATUS_PENDING 0x7fffU
 
 static uint16_t holding_regs[APP_MODBUS_HOLDING_REG_COUNT] = {
 	[0] = 0x0747,
@@ -37,15 +41,27 @@ static uint16_t holding_regs[APP_MODBUS_HOLDING_REG_COUNT] = {
 
 static struct modbus_adu tcp_adu;
 static K_SEM_DEFINE(raw_response_ready, 0, 1);
+static K_SEM_DEFINE(command_done, 0, 1);
+static K_MUTEX_DEFINE(holding_regs_lock);
 static int server_iface = -1;
 static bool server_started;
+static bool command_pending;
 static uint16_t connection_count;
 static uint16_t heartbeat_counter;
 static int16_t last_status;
+static int command_result;
+static uint16_t pending_command;
 
 K_THREAD_STACK_DEFINE(modbus_tcp_stack, APP_MODBUS_THREAD_STACK_SIZE);
+K_THREAD_STACK_DEFINE(modbus_cmd_workq_stack, APP_MODBUS_CMD_WORKQ_STACK_SIZE);
 static struct k_thread modbus_tcp_thread;
+static struct k_work_q modbus_cmd_workq;
+static struct k_work modbus_cmd_work;
 static k_tid_t modbus_tcp_tid;
+
+static const struct k_work_queue_config modbus_cmd_workq_cfg = {
+	.name = "modbus_cmd_wq",
+};
 
 static uint16_t ipv4_word_msw(const char *ip)
 {
@@ -101,16 +117,17 @@ static void sync_holding_regs_from_saved_cfg(void)
 	holding_regs[APP_MB_HREG_GW_LSW] = ipv4_word_lsw(saved.gw);
 }
 
-static int apply_holding_regs_command(uint16_t command)
+static int save_holding_regs_config(uint16_t command)
 {
 	struct net_cfg_data saved = { 0 };
-	int ret;
 
 	if (command == APP_MB_CMD_NONE) {
 		return 0;
 	}
 
+	k_mutex_lock(&holding_regs_lock, K_FOREVER);
 	if (holding_regs[APP_MB_HREG_MODE] > NET_CFG_STATIC) {
+		k_mutex_unlock(&holding_regs_lock);
 		return -EINVAL;
 	}
 
@@ -124,20 +141,53 @@ static int apply_holding_regs_command(uint16_t command)
 	ipv4_words_to_string(holding_regs[APP_MB_HREG_GW_MSW],
 			     holding_regs[APP_MB_HREG_GW_LSW],
 			     saved.gw, sizeof(saved.gw));
+	k_mutex_unlock(&holding_regs_lock);
 
-	ret = net_cfg_set_saved(&saved);
-	if (ret < 0) {
-		return ret;
+	return net_cfg_set_saved(&saved);
+}
+
+static void modbus_sync_from_saved_cfg(void)
+{
+	k_mutex_lock(&holding_regs_lock, K_FOREVER);
+	sync_holding_regs_from_saved_cfg();
+	k_mutex_unlock(&holding_regs_lock);
+}
+
+static void complete_pending_command(int ret)
+{
+	k_mutex_lock(&holding_regs_lock, K_FOREVER);
+	last_status = (int16_t)ret;
+	holding_regs[APP_MB_HREG_STATUS] = (uint16_t)ret;
+	holding_regs[APP_MB_HREG_COMMAND] = APP_MB_CMD_NONE;
+	command_pending = false;
+	k_mutex_unlock(&holding_regs_lock);
+
+	if (ret == 0) {
+		modbus_sync_from_saved_cfg();
 	}
 
-	if (command == APP_MB_CMD_SAVE_APPLY) {
-		ret = net_cfg_apply(NULL);
-		if (ret < 0) {
-			return ret;
-		}
-	}
+	command_result = ret;
+	k_sem_give(&command_done);
+}
 
-	return 0;
+static void modbus_net_cfg_changed(void)
+{
+	modbus_sync_from_saved_cfg();
+}
+
+static void modbus_command_work_handler(struct k_work *work)
+{
+	uint16_t command;
+	int ret;
+
+	ARG_UNUSED(work);
+
+	k_mutex_lock(&holding_regs_lock, K_FOREVER);
+	command = pending_command;
+	k_mutex_unlock(&holding_regs_lock);
+
+	ret = save_holding_regs_config(command);
+	complete_pending_command(ret);
 }
 
 static int input_reg_rd(uint16_t addr, uint16_t *reg)
@@ -211,30 +261,71 @@ static int holding_reg_rd(uint16_t addr, uint16_t *reg)
 		return -ENOTSUP;
 	}
 
-	sync_holding_regs_from_saved_cfg();
+	k_mutex_lock(&holding_regs_lock, K_FOREVER);
 	*reg = holding_regs[addr];
+	k_mutex_unlock(&holding_regs_lock);
 	return 0;
 }
 
 static int holding_reg_wr(uint16_t addr, uint16_t reg)
 {
-	int ret;
+	bool wait_for_command = false;
+	int submit_ret;
 
 	if (addr >= APP_MODBUS_HOLDING_REG_COUNT) {
 		return -ENOTSUP;
 	}
 
+	k_mutex_lock(&holding_regs_lock, K_FOREVER);
 	holding_regs[addr] = reg;
 
 	if (addr == APP_MB_HREG_COMMAND) {
-		ret = apply_holding_regs_command(reg);
-		last_status = (int16_t)ret;
-		holding_regs[APP_MB_HREG_STATUS] = (uint16_t)ret;
-		holding_regs[APP_MB_HREG_COMMAND] = APP_MB_CMD_NONE;
-
-		if (ret == 0) {
-			sync_holding_regs_from_saved_cfg();
+		if (reg != APP_MB_CMD_SAVE) {
+			holding_regs[APP_MB_HREG_STATUS] = (uint16_t)-EINVAL;
+			last_status = -EINVAL;
+			holding_regs[APP_MB_HREG_COMMAND] = APP_MB_CMD_NONE;
+			k_mutex_unlock(&holding_regs_lock);
+			return -EINVAL;
 		}
+
+		if (command_pending) {
+			holding_regs[APP_MB_HREG_STATUS] = (uint16_t)-EBUSY;
+			last_status = -EBUSY;
+			holding_regs[APP_MB_HREG_COMMAND] = APP_MB_CMD_NONE;
+			k_mutex_unlock(&holding_regs_lock);
+			return -EBUSY;
+		}
+
+		pending_command = reg;
+		command_pending = true;
+		holding_regs[APP_MB_HREG_STATUS] = APP_MODBUS_STATUS_PENDING;
+		last_status = (int16_t)APP_MODBUS_STATUS_PENDING;
+		k_sem_reset(&command_done);
+		submit_ret = k_work_submit_to_queue(&modbus_cmd_workq, &modbus_cmd_work);
+		if (submit_ret < 0) {
+			holding_regs[APP_MB_HREG_STATUS] = (uint16_t)submit_ret;
+			last_status = (int16_t)submit_ret;
+			holding_regs[APP_MB_HREG_COMMAND] = APP_MB_CMD_NONE;
+			command_pending = false;
+			k_mutex_unlock(&holding_regs_lock);
+			return submit_ret;
+		}
+		wait_for_command = true;
+	}
+
+	k_mutex_unlock(&holding_regs_lock);
+
+	if (wait_for_command &&
+	    k_sem_take(&command_done, K_MSEC(APP_MODBUS_CMD_TIMEOUT_MS)) != 0) {
+		k_mutex_lock(&holding_regs_lock, K_FOREVER);
+		holding_regs[APP_MB_HREG_STATUS] = (uint16_t)-ETIMEDOUT;
+		last_status = -ETIMEDOUT;
+		k_mutex_unlock(&holding_regs_lock);
+		return -ETIMEDOUT;
+	}
+
+	if (wait_for_command) {
+		return command_result;
 	}
 
 	return 0;
@@ -343,8 +434,18 @@ static int init_modbus_server(void)
 {
 	int ret;
 
+	k_work_init(&modbus_cmd_work, modbus_command_work_handler);
+	k_work_queue_init(&modbus_cmd_workq);
+	k_work_queue_start(&modbus_cmd_workq, modbus_cmd_workq_stack,
+			   K_THREAD_STACK_SIZEOF(modbus_cmd_workq_stack),
+			   APP_MODBUS_CMD_WORKQ_PRIORITY,
+			   &modbus_cmd_workq_cfg);
+	net_cfg_register_change_cb(modbus_net_cfg_changed);
+
+	k_mutex_lock(&holding_regs_lock, K_FOREVER);
 	sync_holding_regs_from_saved_cfg();
 	holding_regs[APP_MB_HREG_STATUS] = 0;
+	k_mutex_unlock(&holding_regs_lock);
 
 	server_iface = modbus_iface_get_by_name("RAW_0");
 	if (server_iface < 0) {
