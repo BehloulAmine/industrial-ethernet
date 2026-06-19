@@ -1,4 +1,4 @@
-# H747 Demo — Webserver Industriel sous Zephyr
+# Industrial Ethernet — Zephyr sur STM32H747I-DISCO
 
 Prototype embarqué industriel sur **STM32H747I-DISCO** démontrant :
 
@@ -7,14 +7,29 @@ Prototype embarqué industriel sur **STM32H747I-DISCO** démontrant :
 - Modbus TCP (server + scanner)
 - EtherNet/IP (OpENer)
 - WS-Discovery (DPWS)
-- Firmware update OTA + Secure Boot
+- Firmware update + Secure Boot
+
+## Documentation
+
+Ce README sert de guide de setup, build, flash et vérification du projet courant.
+
+- [Eth_industriel_plan.md](Eth_industriel_plan.md) : plan fonctionnel complet de la démo Ethernet industriel, avec les phases Modbus, webserver, EtherNet/IP, DPWS, sécurité, firmware update et secure boot.
+- [Devicetree_memory.md](Devicetree_memory.md) : notes techniques sur le devicetree STM32H747, la mémoire visible par l'image M7, les partitions flash et le stockage `settings` sur QSPI.
+
+## État actuel
+
+La branche actuelle correspond au bring-up M7 avec :
+
+- heartbeat LED et logs UART ;
+- Ethernet IPv4 avec DHCP ou IP statique persistée ;
+- shell UART avec commandes `ip show`, `ip dhcp`, `ip static`, `uptime` et `reboot` ;
+- serveur Modbus TCP sur le port 502, unit-ID 1 ;
+- registres Modbus exposant la configuration réseau, l'IP active, l'uptime, l'état du lien et un compteur de connexions ;
+- stockage `settings` via NVS sur la QSPI externe, pour éviter d'utiliser un secteur de flash interne.
 
 ## Prérequis
-
-- **Git Bash** (inclus avec Git for Windows)
 - **Python 3.12** disponible dans le PATH
 - **7-Zip** installé dans `C:\Program Files\7-Zip\` (requis par `west sdk install`)
-- **Connexion internet** (plusieurs Go à télécharger)
 
 ## Setup WSL Ubuntu
 
@@ -33,8 +48,8 @@ sudo apt install --no-install-recommends git cmake ninja-build gperf \
 ### 2. Cloner et initialiser le workspace
 
 ```bash
-git clone git@github.schneider-electric.com:SESA743279/h747-demo.git h747-demo
-cd h747-demo
+git clone https://github.com/behloulmedamine/industrial-ethernet.git industrial-ethernet
+cd industrial-ethernet
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -156,13 +171,13 @@ Quitter `minicom` avec `Ctrl-A`, puis `X`.
 usbipd detach --busid 3-2
 ```
 
-## Setup windows
+## Setup Windows
 
 ### 1. Cloner et initialiser le workspace
 
 ```bash
-git clone git@github.schneider-electric.com:SESA743279/h747-demo.git h747-demo
-cd h747-demo
+git clone https://github.com/behloulmedamine/industrial-ethernet.git industrial-ethernet
+cd industrial-ethernet
 
 # Créer le venv Python
 py -3.12 -m venv .venv
@@ -198,8 +213,8 @@ west zephyr-export
 
 ```bash
 cd ../zephyr
-git apply ../h747-demo/patches/zephyr-cmake-backslash.patch
-cd ../h747-demo
+git apply ../industrial-ethernet/patches/zephyr-cmake-backslash.patch
+cd ../industrial-ethernet
 ```
 
 > ⚠️ Ce patch corrige la gestion des backslashes dans `-fmacro-prefix-map` sur Windows.
@@ -236,6 +251,7 @@ Quand utiliser `west build` vs `cmake --build build` :
 - **LED LD1** clignote (heartbeat ~1 Hz)
 - Brancher un câble Ethernet → logs UART affichent l'IP DHCP
 - `ping <IP>` depuis le PC
+- Le serveur Modbus TCP écoute sur `<IP>:502`, unit-ID `1`
 
 **Logs UART (115200 baud) :**
 
@@ -277,45 +293,21 @@ rg -n -C 4 'zephyr,settings-partition|storage_partition|qspi-nor-flash@0' build/
 rg -n 'CONFIG_NVS=|CONFIG_SETTINGS_NVS|CONFIG_FLASH_STM32_QSPI|CONFIG_SETTINGS_FCB' build/zephyr/.config
 ```
 
-## Modbus TCP
-
-L'application lance un serveur Modbus TCP sur le port standard `502`.
-
-- Unit ID : `1`
-- Holding registers : adresses `0..31`
-- Input registers : adresses `0..15`
-- FC03, FC04, FC06 et FC16 : supportes par la stack serveur Modbus Zephyr via callbacks applicatifs
-- FC23 : ajoute dans l'application comme function code custom `0x17`
-
-Mapping de depart :
-
-Les adresses Modbus sont centralisees dans `app/src/modbus_map.h`.
-
-La configuration IP est appliquee uniquement au demarrage. Depuis le shell `ip ...` ou depuis
-Modbus, une modification sauvegarde la nouvelle configuration en flash, puis il faut redemarrer
-la carte pour l'activer. Cote Modbus, `HR8 = 1` sauvegarde la configuration preparee dans les
-holding registers; `HR9 = 0` indique que la sauvegarde a reussi.
-
-Exemple avec `mbpoll` depuis le PC :
-
-```bash
-mbpoll -m tcp -a 1 -r 1 -c 2 <IP_DE_LA_CARTE>
-mbpoll -m tcp -a 1 -r 2 -t 4:int -1 1234 <IP_DE_LA_CARTE>
-```
-
 ## Structure du projet
 
 ```
-h747-demo/
+industrial-ethernet/
 ├── west.yml              ← Manifest Zephyr (pointe vers v4.4.0)
+├── README.md             ← Setup, build, flash et vérification
+├── Eth_industriel_plan.md ← Plan global de la démo industrielle
+├── Devicetree_memory.md  ← Notes mémoire, devicetree et settings/QSPI
 ├── app/                  ← Application Cortex-M7 (réseau)
 │   ├── CMakeLists.txt
 │   ├── prj.conf
 │   ├── boards/           ← DTS overlays
-│   └── src/main.c
+│   └── src/              ← Main, réseau, Modbus TCP et commandes shell
 ├── app_m4/               ← (futur) Application Cortex-M4 (LCD)
-├── patches/              ← Patches Zephyr pour Windows
-└── README.md
+└── patches/              ← Patches Zephyr pour Windows
 ```
 
 ## Board

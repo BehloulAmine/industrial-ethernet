@@ -1,15 +1,15 @@
-# Plan Démo : Webserver Industriel sous Zephyr
+# Plan Démo : Ethernet Industriel sous Zephyr
 
 ## Chapitre 1 — Objectif & Résumé du plan
 
 ### 1.1 — But du projet
 
-Ce plan décrit la réalisation d'un **prototype embarqué industriel** tournant sous **Zephyr RTOS**, dont la vocation est de démontrer, sur une carte de développement dual-core (~€85), les mêmes capacités protocolaires et sécuritaires que des cartes de communication industrielles professionnelles telles que la carte **EthModSitara** (TI AM335x, Quadros RTOS) utilisée dans les variateurs ATV/ATS Schneider Electric.
+Ce plan décrit la réalisation d'un **prototype embarqué industriel** tournant sous **Zephyr RTOS**, dont la vocation est de démontrer, sur une carte de développement dual-core (~€85), les mêmes capacités protocolaires et sécuritaires que des cartes de communication industrielles professionnelles.
 
 Le projet vise deux objectifs complémentaires :
 
 1. **Valider la faisabilité d'une stack industrielle complète sous Zephyr** : TCP/IP, Modbus TCP (server + scanner), EtherNet/IP, DPWS/WS-Discovery, DHCP, mDNS, HTTPS, gestion de login.
-2. **Démontrer un niveau de sécurité proche du monde industriel** : firmware signé, mise à jour OTA avec rollback, secure boot avec chaîne de confiance, protection du code en flash.
+2. **Démontrer un niveau de sécurité proche du monde industriel** : firmware signé, secure boot avec chaîne de confiance, protection du code en flash.
 
 Le résultat attendu est un **device réseau découvrable automatiquement**, exposant :
 - un **webserver HTTPS** avec interface de supervision et d'administration (registres, diagnostics, FW update),
@@ -33,10 +33,10 @@ Le plan est structuré en **11 phases progressives**, chacune apportant une couc
 | **Phase 5** | EtherNet/IP via OpENer | Device CIP identifiable par RSLinx / EIPScan |
 | **Phase 6** | DPWS / WS-Discovery (UDP multicast 3702) | Découverte auto depuis WSDiscoveryTool |
 | **Phase 7** | Sécurité HTTP : login, tokens, HTTPS/TLS | Interface protégée par login + TLS (certif ECC P-256) |
-| **Phase 8** | Firmware Update OTA + rollback MCUboot | Upload d'un `.bin` signé via le web, rollback auto |
+| **Phase 8** | Firmware Update + rollback MCUboot | Upload d'un `.bin` signé via le web, rollback auto |
 | **Phase 9** | Signature ECDSA des images | Seule une image signée par la clé légitime s'installe |
 | **Phase 10** | Secure Boot (RDP, OTP, chain of trust) | Chaîne ROM → MCUboot → App inviolable |
-| **Phase 11** | Polish : logs, diagnostics, mDNS, doc | Démo finale complète + hostname `h747-demo.local` |
+| **Phase 11** | Polish : logs, diagnostics, mDNS, doc | Démo finale complète + hostname `industrial-ethernet.local` |
 
 
 **Carte retenue : STM32H747I-DISCO** — Dual-core Cortex-M7 @ 480 MHz + Cortex-M4 @ 240 MHz, 1 MB SRAM + 32 MB SDRAM, 2 MB Flash + 128 MB QSPI, Ethernet PHY + RJ45 intégrés, LCD 4" tactile, crypto HW complet (AES-256/HASH/RNG/PKA), support Zephyr ★★★★★.
@@ -175,7 +175,7 @@ CONFIG_MODBUS_CLIENT=y
 
 **Test :** lancer un Modbus slave sur le PC (`diagslave`) et vérifier que la Nucleo scanne et journalise les valeurs.
 
-**Livrable :** double rôle server + scanner (comme EthModSitara), sans UI web dans un premier temps.
+**Livrable :** double rôle server + scanner, sans UI web dans un premier temps.
 
 ---
 
@@ -356,7 +356,7 @@ CONFIG_HTTP_SERVER_TLS=y
 
 **Étape 11.3 — mDNS / Bonjour**
 - `CONFIG_DNS_SD=y` + `CONFIG_MDNS_RESPONDER=y`
-- Hostname `h747-demo.local` accessible sans IP
+- Hostname `industrial-ethernet.local` accessible sans IP
 
 **Étape 11.4 — Doc + démo scénario**
 - README : schéma archi, mapping registres, comment tester chaque protocole
@@ -409,3 +409,4 @@ Prochaine étape : générer le squelette du projet Zephyr pour la STM32H747I-DI
 - DTS overlay (partition layout QSPI + SDRAM + LCD)
 - `main.c` M7 : DHCP + Modbus server
 - `main.c` M4 : LVGL dashboard + OpenAMP listener
+

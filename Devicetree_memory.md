@@ -110,24 +110,66 @@ Limite rencontree ici:
 Conclusion pratique pour ce projet:
 
 - NVS est le backend retenu pour la persistance des settings de la phase 1.
-- Le stockage settings est maintenant place sur la QSPI externe pour ne pas consommer de secteur flash interne.
+- Le stockage settings est place sur la QSPI externe, pas dans la flash interne.
 
-## Partition settings sur STM32H747
+## Partition settings actuelle: QSPI externe
 
-La board Zephyr fournit par defaut une petite partition:
+La board Zephyr fournit par defaut une petite partition de stockage dans la flash interne:
 
 - `storage_partition: partition@ff800`
 - taille: 2 KiB
 
-Cette taille n'etait pas exploitable ici pour la persistance settings sur flash interne, car l'effacement de la flash interne STM32H747 se fait par secteurs de 128 KiB.
+Cette partition interne n'est pas adaptee a notre usage:
 
-Le projet redefinit donc la partition via l'overlay et la deplace dans la QSPI externe:
+- 2 KiB est trop petit pour le backend NVS tel qu'utilise ici.
+- La flash interne STM32H747 s'efface par secteurs de 128 KiB.
+- Garder les settings en flash interne consommerait un gros secteur pour quelques octets de configuration.
 
-- `zephyr,settings-partition = &storage_partition`
-- suppression de la partition QSPI exemple `partition@0`
-- creation de `storage_partition` au debut de `&mt25ql512ab1`
-- taille: 16 KiB, soit deux secteurs NVS de 8 KiB avec la geometrie exposee par le driver QSPI STM32
-- creation de `external_flash_partition` pour le reste de la QSPI, reservee aux phases suivantes
+Le projet deplace donc explicitement `storage_partition` dans la QSPI externe via:
+
+- `app/boards/stm32h747i_disco_stm32h747xx_m7.overlay`
+- `zephyr,settings-partition = &storage_partition` dans le noeud `/chosen`
+- `CONFIG_FLASH_STM32_QSPI=y` dans `app/prj.conf`
+
+Layout actuel:
+
+```dts
+/ {
+	chosen {
+		zephyr,settings-partition = &storage_partition;
+	};
+};
+
+&flash0 {
+	partitions {
+		/delete-node/ partition@ff800;
+	};
+};
+
+&mt25ql512ab1 {
+	partitions {
+		/delete-node/ partition@0;
+
+		storage_partition: partition@0 {
+			label = "storage";
+			reg = <0x00000000 DT_SIZE_K(16)>;
+		};
+
+		external_flash_partition: partition@4000 {
+			label = "external-flash";
+			reg = <0x00004000 (DT_SIZE_M(64) - DT_SIZE_K(16))>;
+		};
+	};
+};
+```
+
+Details importants:
+
+- la partition interne `partition@ff800` est supprimee de `flash0`
+- la partition exemple `partition@0` fournie dans la QSPI est supprimee
+- `storage_partition` est recreree au debut de `&mt25ql512ab1`
+- `storage_partition` fait 16 KiB, soit deux secteurs NVS de 8 KiB avec la geometrie exposee par le driver QSPI STM32
+- `external_flash_partition` reserve le reste de la QSPI pour les phases suivantes
 
 Effet pratique:
 
@@ -140,7 +182,7 @@ Effet pratique:
 La QSPI externe sera aussi utile pour les prochaines phases:
 
 - LittleFS pour les pages web et certificats
-- slot secondaire MCUboot / OTA
+- slot secondaire MCUboot
 - stockage de diagnostics ou assets
 
 Quand ces phases arriveront, il faudra remplacer le layout temporaire `external_flash_partition` par un layout explicite, par exemple `settings`, `littlefs`, `slot1`, et eventuellement `scratch`.
