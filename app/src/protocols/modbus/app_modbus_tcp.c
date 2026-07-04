@@ -742,3 +742,27 @@ void app_modbus_tcp_heartbeat_tick(void)
 {
 	heartbeat_counter++;
 }
+
+int app_modbus_tcp_holding_read(uint16_t addr, uint16_t *value)
+{
+	if (!value) {
+		return -EINVAL;
+	}
+
+	return holding_reg_rd(addr, value);
+}
+
+int app_modbus_tcp_holding_write(uint16_t addr, uint16_t value)
+{
+	return holding_reg_wr(addr, value);
+}
+
+uint16_t app_modbus_tcp_connection_count(void)
+{
+	return connection_count;
+}
+
+uint16_t app_modbus_tcp_heartbeat_count(void)
+{
+	return heartbeat_counter;
+}

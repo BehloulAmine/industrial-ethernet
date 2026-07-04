@@ -13,6 +13,7 @@
 #include <zephyr/logging/log.h>
 
 #include "app_modbus_tcp.h"
+#include "app_web.h"
 #include "net_cfg.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
@@ -92,6 +93,11 @@ int main(void)
 	ret = app_modbus_tcp_start();
 	if (ret < 0) {
 		LOG_ERR("app_modbus_tcp_start failed: %d", ret);
+	}
+
+	ret = app_web_start();
+	if (ret < 0) {
+		LOG_ERR("app_web_start failed: %d", ret);
 	}
 
 	while (1) {
