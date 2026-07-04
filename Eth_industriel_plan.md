@@ -8,12 +8,12 @@ Ce plan décrit la réalisation d'un **prototype embarqué industriel** tournant
 
 Le projet vise deux objectifs complémentaires :
 
-1. **Valider la faisabilité d'une stack industrielle complète sous Zephyr** : TCP/IP, Modbus TCP (server + scanner), EtherNet/IP, DPWS/WS-Discovery, DHCP, mDNS, HTTPS, gestion de login.
+1. **Valider la faisabilité d'une stack industrielle complète sous Zephyr** : TCP/IP, Modbus TCP (server + scanner via Unit-ID 2), EtherNet/IP, DPWS/WS-Discovery, DHCP, mDNS, HTTPS, gestion de login.
 2. **Démontrer un niveau de sécurité proche du monde industriel** : firmware signé, secure boot avec chaîne de confiance, protection du code en flash.
 
 Le résultat attendu est un **device réseau découvrable automatiquement**, exposant :
 - un **webserver HTTPS** avec interface de supervision et d'administration (registres, diagnostics, FW update),
-- un **serveur Modbus TCP** (port 502) et un **scanner Modbus** configurables depuis le web,
+- un **serveur Modbus TCP** (port 502) avec Unit-ID 1 pour les registres principaux et Unit-ID 2 pour la zone scanner,
 - un **device EtherNet/IP** identifiable par un automate Rockwell ou un outil EIPScan,
 - un **endpoint WS-Discovery** (DPWS, port UDP 3702) permettant la découverte automatique sur le réseau local.
 
@@ -28,7 +28,7 @@ Le plan est structuré en **11 phases progressives**, chacune apportant une couc
 | **Phase 0** | Setup toolchain (Zephyr SDK, West, ST-Link) | `west flash` fonctionne sur STM32H747I-DISCO |
 | **Phase 1** | Connectivité réseau (Ethernet, DHCP, ping) | Carte joignable sur le réseau via DHCP |
 | **Phase 2** | Modbus TCP Server (FC03/04/06/16/23) | Lecture/écriture Modbus depuis QModMaster |
-| **Phase 3** | Modbus Scanner (client) | Polling périodique d'un esclave |
+| **Phase 3** | Modbus Scanner via Unit-ID 2 | Zone 10 registres pilotable par un device externe |
 | **Phase 4** | Webserver HTTP + frontend (registres) | Page web affichant et modifiant des registres |
 | **Phase 5** | EtherNet/IP via OpENer | Device CIP identifiable par RSLinx / EIPScan |
 | **Phase 6** | DPWS / WS-Discovery (UDP multicast 3702) | Découverte auto depuis WSDiscoveryTool |
@@ -78,7 +78,7 @@ Le plan est structuré en **11 phases progressives**, chacune apportant une couc
 │  Cortex-M7 @ 480 MHz (maître)                           │
 │  ├── Zephyr + Net stack (TCP/IP, DHCP, mDNS)           │
 │  ├── HTTP/HTTPS server (port 80/443)                   │
-│  ├── Modbus TCP server + scanner (port 502)            │
+│  ├── Modbus TCP server multi Unit-ID (port 502)        │
 │  ├── EtherNet/IP — OpENer (port 44818)                 │
 │  ├── DPWS / WS-Discovery (port 3702)                  │
 │  ├── mbedTLS (TLS handshake, signature)                │
@@ -160,22 +160,69 @@ CONFIG_MODBUS_FC08_DIAGNOSTIC=y
 
 ---
 
-### Phase 3 — Modbus Scanner (client)
+### Phase 3 — Modbus Scanner via Unit-ID 2
 
-**Étape 3.1 — Modbus client**
-```kconfig
-CONFIG_MODBUS_CLIENT=y
+Objectif : exposer sur la même carte deux espaces Modbus distincts, pilotables par un device externe :
+- **Unit-ID 1** : registres principaux de la carte, déjà exposés par la phase 2.
+- **Unit-ID 2** : zone "scanner" limitée à 10 registres (`scanner_regs[0..9]`) utilisée pour lire et écrire périodiquement les valeurs préparées depuis l'extérieur.
+
+Dans cette phase, la carte reste **Modbus TCP server**. Le "scanner" est volontairement modélisé comme une zone de registres dédiée accessible via Unit-ID 2, afin qu'une PLC, un PC ou un autre device Modbus puisse lire/écrire périodiquement les valeurs sans ajouter tout de suite un client Modbus embarqué.
+
+**Étape 3.1 — Routage par Unit-ID**
+- Conserver le serveur Modbus TCP sur le port 502.
+- Router les requêtes selon l'Unit-ID :
+  - Unit-ID 1 → `registers[]` de la phase 2.
+  - Unit-ID 2 → `scanner_regs[10]`.
+- Refuser proprement toute adresse registre hors plage `0..9` pour Unit-ID 2.
+- Supporter au minimum FC03, FC06 et FC16 sur les registres Unit-ID 2.
+
+**Étape 3.2 — Table de mapping scanner**
+- Ajouter dans Unit-ID 1 une table de mapping dédiée :
+  - `registers[50..59]` : mapping des 10 registres scanner.
+  - `registers[50 + i]` contient directement l'adresse du holding register exposé par `scanner_regs[i]`.
+  - `0xFFFF` = RAM locale, avec lecture/écriture dans une valeur propre à `scanner_regs[i]`.
+- Initialiser le mapping par défaut au boot :
+  - `registers[50] = 1` → `scanner_regs[0]` expose `registers[1]`, donc le mode IP.
+  - `registers[51] = 2` → `scanner_regs[1]` expose `registers[2]`, donc l'adresse IP mot haut.
+  - `registers[52] = 3` → `scanner_regs[2]` expose `registers[3]`, donc l'adresse IP mot bas.
+  - `registers[53..59] = 0xFFFF` → `scanner_regs[3..9]` utilisent leur RAM locale.
+- Le device externe peut modifier ce mapping en runtime en écrivant dans `registers[50..59]` via Unit-ID 1.
+
+**Étape 3.3 — Fenêtre scanner dynamique**
+- `scanner_regs[0..9]` n'est pas une copie fixe : c'est une fenêtre dynamique pilotée par `registers[50..59]`.
+- Quand un device externe lit `scanner_regs[i]` via Unit-ID 2, la carte retourne la valeur interne indiquée par `registers[50 + i]`.
+- Quand un device externe écrit `scanner_regs[i]` via Unit-ID 2, la carte écrit dans la donnée interne indiquée par `registers[50 + i]`.
+- Si `registers[50 + i] = 0xFFFF`, `scanner_regs[i]` lit/écrit une valeur RAM locale.
+- Exemple :
+  - au boot : `registers[50] = 1`, donc `scanner_regs[0]` lit/écrit le mode IP.
+  - si le device externe écrit ensuite `registers[50] = 4` et `registers[51] = 5`, alors `scanner_regs[0]` et `scanner_regs[1]` exposent le masque réseau.
+  - une écriture dans `scanner_regs[0]` met alors à jour le mot haut du masque, pas le mode IP.
+- Le device externe peut lire/écrire périodiquement les adresses `0..9` via Unit-ID 2 sans connaître les registres internes réels.
+
+Exemple : pour `192.168.1.45`, le mapping IP par défaut donne `scanner_regs[1] = 0xC0A8` et `scanner_regs[2] = 0x012D`.
+
+**Étape 3.4 — Test avec device externe**
+- Depuis un PC ou une PLC, lire `registers[50..59]` via Unit-ID 1 pour vérifier le mapping scanner courant.
+- Modifier `registers[50..59]` via Unit-ID 1 pour changer ce que Unit-ID 2 expose.
+- Lire/écrire ensuite Unit-ID 2, adresses `0..9`, pour accéder aux valeurs mappées.
+- Vérifier que les lectures/écritures périodiques sur Unit-ID 2 mettent à jour les diagnostics.
+
+Exemples de tests avec `modpoll` :
+```bash
+# Lire le mapping scanner via Unit-ID 1 : registers[50..59]
+modpoll -m tcp -a 1 -r 51 -c 10 <IP>
+
+# Lire les 10 registres scanner via Unit-ID 2
+modpoll -m tcp -a 2 -r 1 -c 10 <IP>
+
+# Remapper scanner_regs[0..1] vers le masque réseau MSW/LSW
+modpoll -m tcp -a 1 -r 51 -c 2 <IP> 4 5
+
+# Écrire dans scanner_regs[0] : met à jour le mot haut du masque réseau
+modpoll -m tcp -a 2 -r 1 <IP> 65535
 ```
-- Tâche périodique (k_thread) qui poll un device esclave externe
-- Config minimale dans le code au départ : IP cible, slave ID, addr début, nb registres, période
 
-**Étape 3.2 — Stockage des valeurs scannées**
-- Conserver les dernières valeurs lues dans une zone dédiée
-- Distinguer clairement les registres locaux du serveur et les registres lus sur un esclave externe
-
-**Test :** lancer un Modbus slave sur le PC (`diagslave`) et vérifier que la Nucleo scanne et journalise les valeurs.
-
-**Livrable :** double rôle server + scanner, sans UI web dans un premier temps.
+**Livrable :** serveur Modbus TCP multi Unit-ID : Unit-ID 1 configure le mapping scanner via `registers[50..59]`, Unit-ID 2 expose une fenêtre `scanner_regs[0..9]` lisible/écrivable périodiquement selon ce mapping.
 
 ---
 
@@ -195,13 +242,13 @@ CONFIG_FILE_SYSTEM_LITTLEFS=y
 **Étape 4.2 — Pages dynamiques**
 - Endpoint `GET /api/registers` → renvoie le tableau de registres du serveur Modbus
 - Endpoint `POST /api/registers/<id>` → écrit une valeur
-- Endpoint `GET /api/scanner` → JSON des dernières valeurs lues
+- Endpoint `GET /api/scanner` → JSON du mapping `registers[50..59]`, de la fenêtre Unit-ID 2 et des diagnostics
 - La page web devient une vue sur les briques déjà en place, plutôt qu'une source de vérité
 
 **Étape 4.3 — Frontend minimal**
 - HTML + Vanilla JS (pas de framework lourd, on tient en <50 KB)
 - 1 page : tableau de registres, refresh auto (fetch toutes les 1s), inputs pour écriture
-- 1 vue scanner : IP cible, période, dernières valeurs lues
+- 1 vue scanner : mapping `registers[50..59]`, fenêtre Unit-ID 2, période observée et diagnostics
 - Stylé minimaliste (CSS inline)
 
 **Étape 4.4 — Dashboard LCD (Cortex-M4)**

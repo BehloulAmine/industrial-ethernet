@@ -12,4 +12,5 @@ target_sources(app PRIVATE
   src/net/net_cfg.c
   src/shell/util_cmds.c
   src/protocols/modbus/app_modbus_tcp.c
+  src/protocols/modbus/app_modbus_scanner.c
 )

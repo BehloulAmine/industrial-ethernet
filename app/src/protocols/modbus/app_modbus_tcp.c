@@ -15,6 +15,7 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 
+#include "app_modbus_scanner.h"
 #include "app_modbus_tcp.h"
 #include "modbus_map.h"
 #include "net_cfg.h"
@@ -43,8 +44,10 @@ static struct modbus_adu tcp_adu;
 static K_SEM_DEFINE(raw_response_ready, 0, 1);
 static K_SEM_DEFINE(command_done, 0, 1);
 static K_MUTEX_DEFINE(holding_regs_lock);
-static int server_iface = -1;
+static int server_iface_unit1 = -1;
+static int server_iface_unit2 = -1;
 static bool server_started;
+static uint8_t active_request_unit_id;
 static bool command_pending;
 static uint16_t connection_count;
 static uint16_t heartbeat_counter;
@@ -115,6 +118,29 @@ static void sync_holding_regs_from_saved_cfg(void)
 	holding_regs[APP_MB_HREG_MASK_LSW] = ipv4_word_lsw(saved.mask);
 	holding_regs[APP_MB_HREG_GW_MSW] = ipv4_word_msw(saved.gw);
 	holding_regs[APP_MB_HREG_GW_LSW] = ipv4_word_lsw(saved.gw);
+}
+
+static void init_scanner_mapping_defaults(void)
+{
+	holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + 0] = APP_MB_HREG_MODE;
+	holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + 1] = APP_MB_HREG_IP_MSW;
+	holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + 2] = APP_MB_HREG_IP_LSW;
+
+	for (uint16_t i = 3; i < APP_MB_HREG_SCANNER_MAP_COUNT; i++) {
+		holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + i] = APP_MB_SCAN_MAP_FREE;
+	}
+}
+
+static bool is_scanner_mapping_addr(uint16_t addr)
+{
+	return addr >= APP_MB_HREG_SCANNER_MAP_BASE &&
+	       addr < APP_MB_HREG_SCANNER_MAP_BASE + APP_MB_HREG_SCANNER_MAP_COUNT;
+}
+
+static bool is_valid_scanner_mapping(uint16_t holding_addr)
+{
+	return holding_addr == APP_MB_SCAN_MAP_FREE ||
+	       holding_addr < APP_MODBUS_HOLDING_REG_COUNT;
 }
 
 static int save_holding_regs_config(uint16_t command)
@@ -194,6 +220,10 @@ static int input_reg_rd(uint16_t addr, uint16_t *reg)
 {
 	struct net_cfg_data active = { 0 };
 	uint32_t uptime_s = (uint32_t)(k_uptime_get() / 1000);
+
+	if (active_request_unit_id == APP_MODBUS_SCANNER_UNIT_ID) {
+		return -ENOTSUP;
+	}
 
 	if (addr >= APP_MODBUS_INPUT_REG_COUNT) {
 		return -ENOTSUP;
@@ -276,6 +306,10 @@ static int holding_reg_wr(uint16_t addr, uint16_t reg)
 		return -ENOTSUP;
 	}
 
+	if (is_scanner_mapping_addr(addr) && !is_valid_scanner_mapping(reg)) {
+		return -EINVAL;
+	}
+
 	k_mutex_lock(&holding_regs_lock, K_FOREVER);
 	holding_regs[addr] = reg;
 
@@ -331,6 +365,24 @@ static int holding_reg_wr(uint16_t addr, uint16_t reg)
 	return 0;
 }
 
+static int routed_holding_reg_rd(uint16_t addr, uint16_t *reg)
+{
+	if (active_request_unit_id == APP_MODBUS_SCANNER_UNIT_ID) {
+		return app_modbus_scanner_holding_reg_rd(addr, reg);
+	}
+
+	return holding_reg_rd(addr, reg);
+}
+
+static int routed_holding_reg_wr(uint16_t addr, uint16_t reg)
+{
+	if (active_request_unit_id == APP_MODBUS_SCANNER_UNIT_ID) {
+		return app_modbus_scanner_holding_reg_wr(addr, reg);
+	}
+
+	return holding_reg_wr(addr, reg);
+}
+
 static bool fc23_read_write_holding_regs(const int iface,
 					 const struct modbus_adu *const rx_adu,
 					 struct modbus_adu *const tx_adu,
@@ -369,7 +421,7 @@ static bool fc23_read_write_holding_regs(const int iface,
 	for (uint16_t i = 0; i < write_qty; i++) {
 		uint16_t reg = sys_get_be16(&rx_adu->data[9 + (i * sizeof(uint16_t))]);
 
-		if (holding_reg_wr(write_addr + i, reg) != 0) {
+		if (routed_holding_reg_wr(write_addr + i, reg) != 0) {
 			*excep_code = MODBUS_EXC_ILLEGAL_DATA_ADDR;
 			return true;
 		}
@@ -382,7 +434,7 @@ static bool fc23_read_write_holding_regs(const int iface,
 	for (uint16_t i = 0; i < read_qty; i++) {
 		uint16_t reg;
 
-		if (holding_reg_rd(read_addr + i, &reg) != 0) {
+		if (routed_holding_reg_rd(read_addr + i, &reg) != 0) {
 			*excep_code = MODBUS_EXC_ILLEGAL_DATA_ADDR;
 			return true;
 		}
@@ -393,13 +445,15 @@ static bool fc23_read_write_holding_regs(const int iface,
 	return true;
 }
 
-MODBUS_CUSTOM_FC_DEFINE(fc23, fc23_read_write_holding_regs,
+MODBUS_CUSTOM_FC_DEFINE(fc23_unit1, fc23_read_write_holding_regs,
+			APP_MODBUS_FC23_READ_WRITE_REGS, NULL);
+MODBUS_CUSTOM_FC_DEFINE(fc23_unit2, fc23_read_write_holding_regs,
 			APP_MODBUS_FC23_READ_WRITE_REGS, NULL);
 
 static struct modbus_user_callbacks server_callbacks = {
 	.input_reg_rd = input_reg_rd,
-	.holding_reg_rd = holding_reg_rd,
-	.holding_reg_wr = holding_reg_wr,
+	.holding_reg_rd = routed_holding_reg_rd,
+	.holding_reg_wr = routed_holding_reg_wr,
 };
 
 static int raw_tx_cb(const int iface, const struct modbus_adu *adu, void *user_data)
@@ -418,11 +472,23 @@ static int raw_tx_cb(const int iface, const struct modbus_adu *adu, void *user_d
 	return 0;
 }
 
-static const struct modbus_iface_param server_param = {
+static const struct modbus_iface_param server_param_unit1 = {
 	.mode = MODBUS_MODE_RAW,
 	.server = {
 		.user_cb = &server_callbacks,
 		.unit_id = APP_MODBUS_UNIT_ID,
+	},
+	.rawcb = {
+		.raw_tx_cb = raw_tx_cb,
+		.user_data = NULL,
+	},
+};
+
+static const struct modbus_iface_param server_param_unit2 = {
+	.mode = MODBUS_MODE_RAW,
+	.server = {
+		.user_cb = &server_callbacks,
+		.unit_id = APP_MODBUS_SCANNER_UNIT_ID,
 	},
 	.rawcb = {
 		.raw_tx_cb = raw_tx_cb,
@@ -444,31 +510,69 @@ static int init_modbus_server(void)
 
 	k_mutex_lock(&holding_regs_lock, K_FOREVER);
 	sync_holding_regs_from_saved_cfg();
+	init_scanner_mapping_defaults();
 	holding_regs[APP_MB_HREG_STATUS] = 0;
 	k_mutex_unlock(&holding_regs_lock);
 
-	server_iface = modbus_iface_get_by_name("RAW_0");
-	if (server_iface < 0) {
-		LOG_ERR("Failed to get RAW_0 Modbus interface: %d", server_iface);
-		return server_iface;
+	app_modbus_scanner_init(holding_reg_rd, holding_reg_wr);
+
+	server_iface_unit1 = modbus_iface_get_by_name("RAW_0");
+	if (server_iface_unit1 < 0) {
+		LOG_ERR("Failed to get RAW_0 Modbus interface: %d", server_iface_unit1);
+		return server_iface_unit1;
 	}
 
-	ret = modbus_init_server(server_iface, server_param);
+	server_iface_unit2 = modbus_iface_get_by_name("RAW_1");
+	if (server_iface_unit2 < 0) {
+		LOG_ERR("Failed to get RAW_1 Modbus interface: %d", server_iface_unit2);
+		return server_iface_unit2;
+	}
+
+	ret = modbus_init_server(server_iface_unit1, server_param_unit1);
 	if (ret < 0) {
-		LOG_ERR("modbus_init_server failed: %d", ret);
+		LOG_ERR("modbus_init_server Unit-ID %d failed: %d", APP_MODBUS_UNIT_ID, ret);
 		return ret;
 	}
 
-	ret = modbus_register_user_fc(server_iface, &modbus_cfg_fc23);
+	ret = modbus_init_server(server_iface_unit2, server_param_unit2);
 	if (ret < 0) {
-		LOG_ERR("Failed to register FC23 handler: %d", ret);
+		LOG_ERR("modbus_init_server Unit-ID %d failed: %d",
+			APP_MODBUS_SCANNER_UNIT_ID, ret);
 		return ret;
 	}
 
-	LOG_INF("Modbus server ready: unit=%d, holding=%d, input=%d",
-		APP_MODBUS_UNIT_ID, APP_MODBUS_HOLDING_REG_COUNT,
+	ret = modbus_register_user_fc(server_iface_unit1, &modbus_cfg_fc23_unit1);
+	if (ret < 0) {
+		LOG_ERR("Failed to register FC23 handler for Unit-ID %d: %d",
+			APP_MODBUS_UNIT_ID, ret);
+		return ret;
+	}
+
+	ret = modbus_register_user_fc(server_iface_unit2, &modbus_cfg_fc23_unit2);
+	if (ret < 0) {
+		LOG_ERR("Failed to register FC23 handler for Unit-ID %d: %d",
+			APP_MODBUS_SCANNER_UNIT_ID, ret);
+		return ret;
+	}
+
+	LOG_INF("Modbus server ready: units=%d,%d holding=%d scanner=%d input=%d",
+		APP_MODBUS_UNIT_ID, APP_MODBUS_SCANNER_UNIT_ID,
+		APP_MODBUS_HOLDING_REG_COUNT, APP_MODBUS_SCANNER_REG_COUNT,
 		APP_MODBUS_INPUT_REG_COUNT);
 	return 0;
+}
+
+static int modbus_iface_for_unit(uint8_t unit_id)
+{
+	if (unit_id == APP_MODBUS_UNIT_ID || unit_id == 0U) {
+		return server_iface_unit1;
+	}
+
+	if (unit_id == APP_MODBUS_SCANNER_UNIT_ID) {
+		return server_iface_unit2;
+	}
+
+	return -ENODEV;
 }
 
 static int send_all(int client, const void *buf, size_t len)
@@ -515,6 +619,7 @@ static int send_modbus_reply(int client, const struct modbus_adu *adu)
 static int handle_modbus_connection(int client)
 {
 	uint8_t header[MODBUS_MBAP_AND_FC_LENGTH];
+	int iface;
 	int ret;
 
 	ret = zsock_recv(client, header, sizeof(header), ZSOCK_MSG_WAITALL);
@@ -532,8 +637,15 @@ static int handle_modbus_connection(int client)
 		return ret == 0 ? -ENOTCONN : -errno;
 	}
 
+	iface = modbus_iface_for_unit(tcp_adu.unit_id);
+	if (iface < 0) {
+		LOG_WRN("Unsupported Modbus Unit-ID %u", tcp_adu.unit_id);
+		return iface;
+	}
+
 	k_sem_reset(&raw_response_ready);
-	ret = modbus_raw_submit_rx(server_iface, &tcp_adu);
+	active_request_unit_id = tcp_adu.unit_id;
+	ret = modbus_raw_submit_rx(iface, &tcp_adu);
 	if (ret < 0) {
 		LOG_ERR("modbus_raw_submit_rx failed: %d", ret);
 		return ret;
