@@ -1,7 +1,7 @@
 /*
  * Modbus Unit-ID 2 scanner window.
  *
- * Unit-ID 1 owns the scanner mapping table at registers[50..59].
+ * Unit-ID 1 owns the scanner mapping table at registers[40..49].
  * Unit-ID 2 exposes scanner_regs[0..9] as a dynamic window over the data
  * selected by that mapping table.
  */

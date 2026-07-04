@@ -179,51 +179,51 @@ Dans cette phase, la carte reste **Modbus TCP server**. Le "scanner" est volonta
 
 **Étape 3.2 — Table de mapping scanner**
 - Ajouter dans Unit-ID 1 une table de mapping dédiée :
-  - `registers[50..59]` : mapping des 10 registres scanner.
-  - `registers[50 + i]` contient directement l'adresse du holding register exposé par `scanner_regs[i]`.
+  - `registers[40..49]` : mapping des 10 registres scanner.
+  - `registers[40 + i]` contient directement l'adresse du holding register exposé par `scanner_regs[i]`.
   - `0xFFFF` = RAM locale, avec lecture/écriture dans une valeur propre à `scanner_regs[i]`.
 - Initialiser le mapping par défaut au boot :
-  - `registers[50] = 1` → `scanner_regs[0]` expose `registers[1]`, donc le mode IP.
-  - `registers[51] = 2` → `scanner_regs[1]` expose `registers[2]`, donc l'adresse IP mot haut.
-  - `registers[52] = 3` → `scanner_regs[2]` expose `registers[3]`, donc l'adresse IP mot bas.
-  - `registers[53..59] = 0xFFFF` → `scanner_regs[3..9]` utilisent leur RAM locale.
-- Le device externe peut modifier ce mapping en runtime en écrivant dans `registers[50..59]` via Unit-ID 1.
+  - `registers[40] = 1` → `scanner_regs[0]` expose `registers[1]`, donc le mode IP.
+  - `registers[41] = 2` → `scanner_regs[1]` expose `registers[2]`, donc l'adresse IP mot haut.
+  - `registers[42] = 3` → `scanner_regs[2]` expose `registers[3]`, donc l'adresse IP mot bas.
+  - `registers[43..49] = 0xFFFF` → `scanner_regs[3..9]` utilisent leur RAM locale.
+- Le device externe peut modifier ce mapping en runtime en écrivant dans `registers[40..49]` via Unit-ID 1.
 
 **Étape 3.3 — Fenêtre scanner dynamique**
-- `scanner_regs[0..9]` n'est pas une copie fixe : c'est une fenêtre dynamique pilotée par `registers[50..59]`.
-- Quand un device externe lit `scanner_regs[i]` via Unit-ID 2, la carte retourne la valeur interne indiquée par `registers[50 + i]`.
-- Quand un device externe écrit `scanner_regs[i]` via Unit-ID 2, la carte écrit dans la donnée interne indiquée par `registers[50 + i]`.
-- Si `registers[50 + i] = 0xFFFF`, `scanner_regs[i]` lit/écrit une valeur RAM locale.
+- `scanner_regs[0..9]` n'est pas une copie fixe : c'est une fenêtre dynamique pilotée par `registers[40..49]`.
+- Quand un device externe lit `scanner_regs[i]` via Unit-ID 2, la carte retourne la valeur interne indiquée par `registers[40 + i]`.
+- Quand un device externe écrit `scanner_regs[i]` via Unit-ID 2, la carte écrit dans la donnée interne indiquée par `registers[40 + i]`.
+- Si `registers[40 + i] = 0xFFFF`, `scanner_regs[i]` lit/écrit une valeur RAM locale.
 - Exemple :
-  - au boot : `registers[50] = 1`, donc `scanner_regs[0]` lit/écrit le mode IP.
-  - si le device externe écrit ensuite `registers[50] = 4` et `registers[51] = 5`, alors `scanner_regs[0]` et `scanner_regs[1]` exposent le masque réseau.
+  - au boot : `registers[40] = 1`, donc `scanner_regs[0]` lit/écrit le mode IP.
+  - si le device externe écrit ensuite `registers[40] = 4` et `registers[41] = 5`, alors `scanner_regs[0]` et `scanner_regs[1]` exposent le masque réseau.
   - une écriture dans `scanner_regs[0]` met alors à jour le mot haut du masque, pas le mode IP.
 - Le device externe peut lire/écrire périodiquement les adresses `0..9` via Unit-ID 2 sans connaître les registres internes réels.
 
 Exemple : pour `192.168.1.45`, le mapping IP par défaut donne `scanner_regs[1] = 0xC0A8` et `scanner_regs[2] = 0x012D`.
 
 **Étape 3.4 — Test avec device externe**
-- Depuis un PC ou une PLC, lire `registers[50..59]` via Unit-ID 1 pour vérifier le mapping scanner courant.
-- Modifier `registers[50..59]` via Unit-ID 1 pour changer ce que Unit-ID 2 expose.
+- Depuis un PC ou une PLC, lire `registers[40..49]` via Unit-ID 1 pour vérifier le mapping scanner courant.
+- Modifier `registers[40..49]` via Unit-ID 1 pour changer ce que Unit-ID 2 expose.
 - Lire/écrire ensuite Unit-ID 2, adresses `0..9`, pour accéder aux valeurs mappées.
 - Vérifier que les lectures/écritures périodiques sur Unit-ID 2 mettent à jour les diagnostics.
 
 Exemples de tests avec `modpoll` :
 ```bash
-# Lire le mapping scanner via Unit-ID 1 : registers[50..59]
-modpoll -m tcp -a 1 -r 51 -c 10 <IP>
+# Lire le mapping scanner via Unit-ID 1 : registers[40..49]
+modpoll -m tcp -a 1 -r 41 -c 10 <IP>
 
 # Lire les 10 registres scanner via Unit-ID 2
 modpoll -m tcp -a 2 -r 1 -c 10 <IP>
 
 # Remapper scanner_regs[0..1] vers le masque réseau MSW/LSW
-modpoll -m tcp -a 1 -r 51 -c 2 <IP> 4 5
+modpoll -m tcp -a 1 -r 41 -c 2 <IP> 4 5
 
 # Écrire dans scanner_regs[0] : met à jour le mot haut du masque réseau
 modpoll -m tcp -a 2 -r 1 <IP> 65535
 ```
 
-**Livrable :** serveur Modbus TCP multi Unit-ID : Unit-ID 1 configure le mapping scanner via `registers[50..59]`, Unit-ID 2 expose une fenêtre `scanner_regs[0..9]` lisible/écrivable périodiquement selon ce mapping.
+**Livrable :** serveur Modbus TCP multi Unit-ID : Unit-ID 1 configure le mapping scanner via `registers[40..49]`, Unit-ID 2 expose une fenêtre `scanner_regs[0..9]` lisible/écrivable périodiquement selon ce mapping.
 
 ---
 
@@ -243,13 +243,13 @@ CONFIG_FILE_SYSTEM_LITTLEFS=y
 **Étape 4.2 — Pages dynamiques**
 - Endpoint `GET /api/registers` → renvoie le tableau de registres du serveur Modbus
 - Endpoint `POST /api/registers/<id>` → écrit une valeur
-- Endpoint `GET /api/scanner` → JSON du mapping `registers[50..59]`, de la fenêtre Unit-ID 2 et des diagnostics
+- Endpoint `GET /api/scanner` → JSON du mapping `registers[40..49]`, de la fenêtre Unit-ID 2 et des diagnostics
 - La page web devient une vue sur les briques déjà en place, plutôt qu'une source de vérité
 
 **Étape 4.3 — Frontend minimal**
 - HTML + Vanilla JS (pas de framework lourd, on tient en <50 KB)
 - 1 page : tableau de registres, refresh auto (fetch toutes les 1s), inputs pour écriture
-- 1 vue scanner : mapping `registers[50..59]`, fenêtre Unit-ID 2, période observée et diagnostics
+- 1 vue scanner : mapping `registers[40..49]`, fenêtre Unit-ID 2, période observée et diagnostics
 - Stylé minimaliste (CSS inline)
 
 **Livrable :** ouvrir `http://<IP>/` dans un navigateur, voir et modifier des registres, et visualiser le scanner.

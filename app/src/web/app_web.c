@@ -20,6 +20,7 @@
 #include "app_modbus_tcp.h"
 #include "app_web.h"
 #include "app_web_assets.h"
+#include "app_web_logo.h"
 #include "modbus_map.h"
 #include "net_cfg.h"
 
@@ -58,11 +59,21 @@ static int send_all(int client, const void *buf, size_t len)
 	return 0;
 }
 
+static int send_response_data(int client, int code, const char *reason,
+			      const char *type, const void *body, size_t body_len);
+
 static int send_response(int client, int code, const char *reason,
 			 const char *type, const char *body)
 {
-	char header[256];
 	size_t body_len = body ? strlen(body) : 0U;
+
+	return send_response_data(client, code, reason, type, body, body_len);
+}
+
+static int send_response_data(int client, int code, const char *reason,
+			      const char *type, const void *body, size_t body_len)
+{
+	char header[256];
 	int len;
 	int ret;
 
@@ -378,6 +389,11 @@ static int handle_http_request(int client, char *req)
 			return send_response(client, 200, "OK",
 					     "application/javascript; charset=utf-8",
 					     app_web_js);
+		}
+		if (strcmp(path, "/logo.jpg") == 0) {
+			return send_response_data(client, 200, "OK", "image/jpeg",
+						  app_web_logo_jpg,
+						  app_web_logo_jpg_len);
 		}
 		if (strncmp(path, "/api/", 5) == 0) {
 			return handle_api_get(client, path);
