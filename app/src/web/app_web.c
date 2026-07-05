@@ -172,6 +172,20 @@ static int json_registers(char *json, size_t json_len)
 	return (int)(off + (size_t)ret);
 }
 
+static int json_register(char *json, size_t json_len, uint16_t id)
+{
+	uint16_t value;
+	int ret;
+
+	ret = app_modbus_tcp_holding_read(id, &value);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return snprintk(json, json_len, "{\"id\":%u,\"value\":%u}",
+			(unsigned int)id, (unsigned int)value);
+}
+
 static int json_scanner(char *json, size_t json_len)
 {
 	uint16_t mapping[APP_MODBUS_SCANNER_REG_COUNT];
@@ -224,6 +238,31 @@ static int json_scanner(char *json, size_t json_len)
 	}
 
 	return (int)(off + (size_t)ret);
+}
+
+static int json_scanner_slot(char *json, size_t json_len, uint16_t id)
+{
+	uint16_t value;
+	uint16_t mapping;
+	int ret;
+
+	if (id >= APP_MODBUS_SCANNER_REG_COUNT) {
+		return -EINVAL;
+	}
+
+	ret = app_modbus_scanner_holding_reg_rd(id, &value);
+	if (ret < 0) {
+		return ret;
+	}
+
+	ret = app_modbus_tcp_holding_read(APP_MB_HREG_SCANNER_MAP_BASE + id, &mapping);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return snprintk(json, json_len,
+			"{\"id\":%u,\"value\":%u,\"mapping\":%u}",
+			(unsigned int)id, (unsigned int)value, (unsigned int)mapping);
 }
 
 static int parse_value(const char *body, uint16_t *value)
@@ -315,14 +354,19 @@ static int parse_request_line(char *req, char *method, size_t method_len,
 static int handle_api_get(int client, const char *path)
 {
 	static char json[APP_WEB_JSON_BUF_SIZE];
+	uint16_t id;
 	int len;
 
 	if (strcmp(path, "/api/status") == 0) {
 		len = json_status(json, sizeof(json));
 	} else if (strcmp(path, "/api/registers") == 0) {
 		len = json_registers(json, sizeof(json));
+	} else if (parse_id_after_prefix(path, "/api/registers/", &id) == 0) {
+		len = json_register(json, sizeof(json), id);
 	} else if (strcmp(path, "/api/scanner") == 0) {
 		len = json_scanner(json, sizeof(json));
+	} else if (parse_id_after_prefix(path, "/api/scanner/", &id) == 0) {
+		len = json_scanner_slot(json, sizeof(json), id);
 	} else {
 		return send_not_found(client);
 	}
@@ -335,7 +379,7 @@ static int handle_api_get(int client, const char *path)
 	return send_response(client, 200, "OK", "application/json", json);
 }
 
-static int handle_api_post(int client, const char *path, const char *body)
+static int handle_api_put(int client, const char *path, const char *body)
 {
 	uint16_t id;
 	uint16_t value;
@@ -354,6 +398,22 @@ static int handle_api_post(int client, const char *path, const char *body)
 		return send_not_found(client);
 	}
 
+	if (ret < 0) {
+		return send_bad_request(client);
+	}
+
+	return send_response(client, 200, "OK", "application/json", "{\"ok\":true}");
+}
+
+static int handle_api_post(int client, const char *path)
+{
+	int ret;
+
+	if (strcmp(path, "/api/commands/save-config") != 0) {
+		return send_not_found(client);
+	}
+
+	ret = app_modbus_tcp_holding_write(APP_MB_HREG_COMMAND, APP_MB_CMD_SAVE);
 	if (ret < 0) {
 		return send_bad_request(client);
 	}
@@ -403,7 +463,11 @@ static int handle_http_request(int client, char *req)
 	}
 
 	if (strcmp(method, "POST") == 0) {
-		return handle_api_post(client, path, body);
+		return handle_api_post(client, path);
+	}
+
+	if (strcmp(method, "PUT") == 0) {
+		return handle_api_put(client, path, body);
 	}
 
 	return send_response(client, 405, "Method Not Allowed", "application/json",
