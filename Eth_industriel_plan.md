@@ -29,7 +29,7 @@ Le plan est structuré en **12 phases progressives**, chacune apportant une couc
 | **Phase 1** | Connectivité réseau (Ethernet, DHCP, ping) | Carte joignable sur le réseau via DHCP |
 | **Phase 2** | Modbus TCP Server (FC03/04/06/16/23) | Lecture/écriture Modbus depuis QModMaster |
 | **Phase 3** | Modbus Scanner via Unit-ID 2 | Zone 10 registres pilotable par un device externe |
-| **Phase 4** | Webserver HTTP + frontend (registres) | Page web affichant et modifiant des registres |
+| **Phase 4** | Webserver HTTP + REST API + frontend | Dashboard web + registres/scanner pilotables |
 | **Phase 5** | Dashboard LCD local (Cortex-M4, LVGL, OpenAMP) | LCD affichant IP, registres et statut Modbus |
 | **Phase 6** | EtherNet/IP via OpENer | Device CIP identifiable par RSLinx / EIPScan |
 | **Phase 7** | DPWS / WS-Discovery (UDP multicast 3702) | Découverte auto depuis WSDiscoveryTool |
@@ -227,32 +227,47 @@ modpoll -m tcp -a 2 -r 1 <IP> 65535
 
 ---
 
-### Phase 4 — Webserver HTTP (statique puis dynamique)
+### Phase 4 — Webserver HTTP + REST API + frontend
 
-**Étape 4.1 — HTTP server v2 (Zephyr ≥ 3.5)**
+Objectif : exposer une interface web embarquée de supervision/configuration, sans framework lourd, connectée aux mêmes données que Modbus.
+
+**Étape 4.1 — Serveur HTTP embarqué**
 ```kconfig
-CONFIG_HTTP_SERVER=y
-CONFIG_HTTP_PARSER=y
 CONFIG_NET_SOCKETS=y
-CONFIG_FILE_SYSTEM=y
-CONFIG_FILE_SYSTEM_LITTLEFS=y
+CONFIG_NET_MAX_CONTEXTS=14
 ```
-- Page d'accueil statique servie depuis LittleFS (partition flash dédiée)
-- Routes initiales : `GET /` (HTML), `GET /api/status` (JSON)
+- Implémentation actuelle : serveur HTTP léger basé sur sockets Zephyr, port 80.
+- Assets web embarqués provisoirement en C : HTML/CSS/JS + logo JPG servi via `GET /logo.jpg`.
+- Migration prévue plus tard : assets statiques dans LittleFS/QSPI (`/www/index.html`, `/www/app.js`, `/www/logo.jpg`) et éventuellement HTTP server v2.
 
-**Étape 4.2 — Pages dynamiques**
-- Endpoint `GET /api/registers` → renvoie le tableau de registres du serveur Modbus
-- Endpoint `POST /api/registers/<id>` → écrit une valeur
-- Endpoint `GET /api/scanner` → JSON du mapping `registers[40..49]`, de la fenêtre Unit-ID 2 et des diagnostics
-- La page web devient une vue sur les briques déjà en place, plutôt qu'une source de vérité
+**Étape 4.2 — REST API minimale**
+- `GET /api/status` → état réel actif de la carte : IP active, mode actif, heartbeat, connexions Modbus.
+- `GET /api/registers` → tableau des 50 holding registers.
+- `GET /api/registers/<id>` → lecture d'un registre.
+- `PUT /api/registers/<id>` → écriture d'un registre avec body JSON `{"value":123}`.
+- `GET /api/scanner` → mapping `registers[40..49]` + fenêtre Unit-ID 2.
+- `GET /api/scanner/<id>` → lecture d'un slot scanner.
+- `PUT /api/scanner/<id>` → écriture d'un slot scanner avec body JSON `{"value":123}`.
+- `POST /api/commands/save-config` → déclenche la sauvegarde de configuration réseau.
+- Convention retenue : `GET` pour lire, `PUT` pour modifier une ressource connue, `POST` pour déclencher une commande.
 
-**Étape 4.3 — Frontend minimal**
-- HTML + Vanilla JS (pas de framework lourd, on tient en <50 KB)
-- 1 page : tableau de registres, refresh auto (fetch toutes les 1s), inputs pour écriture
-- 1 vue scanner : mapping `registers[40..49]`, fenêtre Unit-ID 2, période observée et diagnostics
-- Stylé minimaliste (CSS inline)
+**Étape 4.3 — Frontend industriel**
+- HTML/CSS/Vanilla JS, sans framework lourd.
+- Dashboard :
+  - KPI : mode IP actif, IP active, connexions Modbus, heartbeat.
+  - Badge de configuration : vert si les registres réseau correspondent à l'état actif, orange si un reboot/apply est requis.
+  - Deux panneaux graphiques génériques de prévisualisation pour futurs widgets.
+- Page Registres :
+  - registres réseau décodés : signature en hex, mode DHCP/Static, IP/mask/gateway au format IPv4.
+  - commande `Save config` via REST API.
+  - mapping scanner `REG40..REG49` affiché avant les registres libres.
+  - registres libres `REG10..REG39` en valeurs brutes.
+- Page Scanner :
+  - `Scanner 0..9` avec cible lisible, par exemple `Mode IP (REG1)` ou `Free`.
+  - écriture via `PUT /api/scanner/<id>`.
+- Refresh automatique toutes les 1,5 s, avec verrou d'édition pour ne pas écraser les valeurs en cours de saisie.
 
-**Livrable :** ouvrir `http://<IP>/` dans un navigateur, voir et modifier des registres, et visualiser le scanner.
+**Livrable :** ouvrir `http://<IP>/`, superviser l'état actif, modifier les registres via REST API, configurer le mapping scanner et visualiser la fenêtre Unit-ID 2.
 
 ---
 
@@ -325,7 +340,7 @@ Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-
 **Étape 8.1 — Login management**
 - Subsys **settings** pour stocker user/password hashé (SHA-256 + salt)
 - Endpoint `POST /api/login` → renvoie un token (UUID random via TRNG HW)
-- Middleware HTTP : routes `/api/registers POST` exigent header `Authorization: Bearer <token>`
+- Middleware HTTP : routes mutantes REST (`PUT /api/registers/<id>`, `PUT /api/scanner/<id>`, `POST /api/commands/*`) exigent header `Authorization: Bearer <token>`
 - Tokens en RAM avec expiration (timer Zephyr)
 
 **Étape 8.2 — Changement mot de passe**
