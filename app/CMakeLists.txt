@@ -5,6 +5,7 @@ project(industrial_ethernet)
 target_include_directories(app PRIVATE
   src/net
   src/protocols/modbus
+  src/ui
   src/web
 )
 
@@ -14,5 +15,6 @@ target_sources(app PRIVATE
   src/shell/util_cmds.c
   src/protocols/modbus/app_modbus_tcp.c
   src/protocols/modbus/app_modbus_scanner.c
+  src/ui/app_lcd.c
   src/web/app_web.c
 )

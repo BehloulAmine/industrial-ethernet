@@ -78,6 +78,22 @@ Sous WSL Ubuntu, le patch Windows `patches/zephyr-cmake-backslash.patch` n'est p
 west build -p always -b stm32h747i_disco/stm32h747xx/m7 app
 ```
 
+Pour construire avec le dashboard LCD local (phase 5) :
+
+```bash
+west update
+west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- \
+  -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf
+```
+
+Si la dalle porte la révision A09, utiliser le shield
+`st_b_lcd40_dsi1_mb1166_a09`. Le LCD est piloté par le M7, car c'est la cible
+prise en charge par Zephyr pour LTDC/MIPI-DSI sur cette carte.
+
+Sous Windows, installer également Ninja dans le virtualenv avec
+`pip install ninja`. Cela évite que le `ninja.exe` fourni par IAR soit utilisé
+pour l'archivage de LVGL.
+
 ### 5. Flash depuis WSL
 
 Deux approches possibles :

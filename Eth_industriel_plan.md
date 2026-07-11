@@ -30,7 +30,7 @@ Le plan est structuré en **12 phases progressives**, chacune apportant une couc
 | **Phase 2** | Modbus TCP Server (FC03/04/06/16/23) | Lecture/écriture Modbus depuis QModMaster |
 | **Phase 3** | Modbus Scanner via Unit-ID 2 | Zone 10 registres pilotable par un device externe |
 | **Phase 4** | Webserver HTTP + REST API + frontend | Dashboard web + registres/scanner pilotables |
-| **Phase 5** | Dashboard LCD local (Cortex-M4, LVGL, OpenAMP) | LCD affichant IP, registres et statut Modbus |
+| **Phase 5** | Dashboard LCD local (Cortex-M7, LVGL) | LCD affichant IP, services et fenêtre scanner |
 | **Phase 6** | EtherNet/IP via OpENer | Device CIP identifiable par RSLinx / EIPScan |
 | **Phase 7** | DPWS / WS-Discovery (UDP multicast 3702) | Découverte auto depuis WSDiscoveryTool |
 | **Phase 8** | Sécurité HTTP : login, tokens, HTTPS/TLS | Interface protégée par login + TLS (certif ECC P-256) |
@@ -271,35 +271,37 @@ CONFIG_NET_MAX_CONTEXTS=14
 
 ---
 
-### Phase 5 — Dashboard LCD local (Cortex-M4)
+### Phase 5 — Dashboard LCD local (Cortex-M7)
 
 Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-DISCO, indépendante du webserver.
 
-**Étape 5.1 — Image M4 dédiée**
-- Créer une image Zephyr séparée pour le Cortex-M4 :
-  - `west build -b stm32h747i_disco/stm32h747xx/m4`
-- Garder le M7 responsable du réseau, de Modbus, du webserver et des protocoles industriels.
-- Garder le M4 responsable de l'affichage local et de l'interface tactile.
+> **Choix d'architecture :** sous Zephyr 4.4, le shield LCD `st_b_lcd40_dsi1_mb1166`
+> et les périphériques LTDC/MIPI-DSI sont supportés sur la cible M7 uniquement. Le M4 reste
+> réservé à une future application temps réel (acquisition, DSP ou CANopen) communiquant avec
+> le M7 via OpenAMP/RPMsg.
 
-**Étape 5.2 — Communication M7→M4**
-- Utiliser OpenAMP / RPMsg pour pousser périodiquement un snapshot depuis le M7 vers le M4 :
-  - IP active.
-  - mode IP.
-  - état lien Ethernet.
-  - statut Modbus.
-  - registres principaux et fenêtre scanner Unit-ID 2.
-- Définir une structure C compacte et versionnée pour éviter les incompatibilités M7/M4.
+**Étape 5.1 — Activer le LCD et LVGL**
+- Ajouter le module `lvgl` au manifeste West puis exécuter `west update`.
+- Construire l'image M7 avec le shield correspondant à la révision de la dalle :
+  - `west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf`
+  - variante dalle A09 : `-DSHIELD=st_b_lcd40_dsi1_mb1166_a09`.
 
-**Étape 5.3 — Dashboard LVGL**
+**Étape 5.2 — Module UI séparé**
+- Sources dans `app/src/ui/app_lcd.c` et `app_lcd.h`.
+- Une tâche LCD dédiée est l'unique propriétaire des objets LVGL.
+- La configuration LVGL est isolée dans `app/lcd.conf` : le build Ethernet historique sans shield reste disponible et le dashboard est alors désactivé avec un log explicite.
+
+**Étape 5.3 — Dashboard local**
 - LVGL affiche sur le LCD 4" :
   - IP courante.
-  - état réseau.
-  - statut Modbus/EIP.
-  - registres en barre-graphe ou tableau compact.
-  - fenêtre scanner avec mapping courant.
-- Bonus tactile : bouton "reboot" / switch dark mode sur l'écran.
+  - mode DHCP/statique.
+  - état du lien Ethernet.
+  - nombre de connexions Modbus et heartbeat.
+  - statut de la dernière commande.
+  - cinq premières valeurs de la fenêtre scanner sous forme de barres.
+- Rafraîchissement local toutes les 500 ms, sans navigateur et sans requête HTTP.
 
-**Livrable :** le LCD affiche un dashboard local alimenté par le M7 via RPMsg, sans dépendre du navigateur web.
+**Livrable :** le LCD affiche un dashboard local alimenté directement par les services M7, sans dépendre du navigateur web.
 
 ---
 
@@ -461,7 +463,7 @@ Phase 1  : Réseau base      ────►
 Phase 2  : Modbus server    ────►
 Phase 3  : Modbus scanner   ────►
 Phase 4  : Webserver        ────►
-Phase 5  : LCD dashboard    ────►   ◄── séparé du webserver
+Phase 5  : LCD dashboard M7 ────►   ◄── séparé du webserver
 Phase 6  : EtherNet/IP      ────►   ◄── peut être skippé si trop ambitieux
 Phase 7  : DPWS             ────►   ◄── optionnel
 Phase 8  : Auth + HTTPS     ────►

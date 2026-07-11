@@ -13,6 +13,7 @@
 #include <zephyr/logging/log.h>
 
 #include "app_modbus_tcp.h"
+#include "app_lcd.h"
 #include "app_web.h"
 #include "net_cfg.h"
 
@@ -98,6 +99,11 @@ int main(void)
 	ret = app_web_start();
 	if (ret < 0) {
 		LOG_ERR("app_web_start failed: %d", ret);
+	}
+
+	ret = app_lcd_start();
+	if (ret < 0) {
+		LOG_WRN("app_lcd_start failed: %d", ret);
 	}
 
 	while (1) {
