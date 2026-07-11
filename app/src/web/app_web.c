@@ -14,6 +14,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/net/socket.h>
+#include <zephyr/sys/reboot.h>
 #include <zephyr/sys/util.h>
 
 #include "app_modbus_scanner.h"
@@ -36,7 +37,16 @@ LOG_MODULE_REGISTER(app_web, LOG_LEVEL_INF);
 K_THREAD_STACK_DEFINE(app_web_stack, APP_WEB_THREAD_STACK_SIZE);
 static struct k_thread app_web_thread;
 static k_tid_t app_web_tid;
+static struct k_work_delayable reboot_work;
 static bool web_started;
+
+static void reboot_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	LOG_WRN("Web reboot requested");
+	sys_reboot(SYS_REBOOT_COLD);
+}
 
 static int send_all(int client, const void *buf, size_t len)
 {
@@ -409,16 +419,25 @@ static int handle_api_post(int client, const char *path)
 {
 	int ret;
 
-	if (strcmp(path, "/api/commands/save-config") != 0) {
-		return send_not_found(client);
+	if (strcmp(path, "/api/commands/save-config") == 0) {
+		ret = app_modbus_tcp_holding_write(APP_MB_HREG_COMMAND, APP_MB_CMD_SAVE);
+		if (ret < 0) {
+			return send_bad_request(client);
+		}
+
+		return send_response(client, 200, "OK", "application/json", "{\"ok\":true}");
 	}
 
-	ret = app_modbus_tcp_holding_write(APP_MB_HREG_COMMAND, APP_MB_CMD_SAVE);
-	if (ret < 0) {
-		return send_bad_request(client);
+	if (strcmp(path, "/api/commands/reboot") == 0) {
+		ret = send_response(client, 202, "Accepted", "application/json",
+				    "{\"ok\":true}");
+		if (ret == 0) {
+			(void)k_work_reschedule(&reboot_work, K_MSEC(500));
+		}
+		return ret;
 	}
 
-	return send_response(client, 200, "OK", "application/json", "{\"ok\":true}");
+	return send_not_found(client);
 }
 
 static int handle_http_request(int client, char *req)
@@ -536,6 +555,8 @@ int app_web_start(void)
 	if (web_started) {
 		return 0;
 	}
+
+	k_work_init_delayable(&reboot_work, reboot_work_handler);
 
 	app_web_tid = k_thread_create(&app_web_thread, app_web_stack,
 				      K_THREAD_STACK_SIZEOF(app_web_stack),
