@@ -300,6 +300,7 @@ Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-
   - statut de la dernière commande.
   - cinq premières valeurs de la fenêtre scanner sous forme de barres.
 - Rafraîchissement local toutes les 500 ms, sans navigateur et sans requête HTTP.
+- Bouton `Sleep` : mise en veille du panneau et du backlight ; le premier toucher réveille l'affichage sans déclencher d'action dans l'IHM.
 
 **Livrable :** le LCD affiche un dashboard local alimenté directement par les services M7, sans dépendre du navigateur web.
 

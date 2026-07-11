@@ -32,12 +32,23 @@ LOG_MODULE_REGISTER(app_lcd, LOG_LEVEL_INF);
 
 #include <lvgl.h>
 
+#if DT_HAS_COMPAT_STATUS_OKAY(orisetech_otm8009a)
+#define APP_LCD_PANEL_NODE DT_COMPAT_GET_ANY_STATUS_OKAY(orisetech_otm8009a)
+#elif DT_HAS_COMPAT_STATUS_OKAY(frida_nt35510)
+#define APP_LCD_PANEL_NODE DT_COMPAT_GET_ANY_STATUS_OKAY(frida_nt35510)
+#else
+#error "Unsupported LCD panel"
+#endif
+
 K_THREAD_STACK_DEFINE(app_lcd_stack, APP_LCD_THREAD_STACK_SIZE);
 static struct k_thread app_lcd_thread;
 static k_tid_t app_lcd_tid;
 static struct k_work_delayable reboot_work;
 static bool lcd_started;
+static bool lcd_sleeping;
+static bool lcd_wake_requested;
 static uint32_t reboot_confirm_until;
+static const struct device *const lcd_panel = DEVICE_DT_GET(APP_LCD_PANEL_NODE);
 
 static lv_obj_t *ip_value;
 static lv_obj_t *mode_value;
@@ -50,6 +61,10 @@ static lv_obj_t *scanner_bars[APP_LCD_SCANNER_ROWS];
 static lv_obj_t *scanner_values[APP_LCD_SCANNER_ROWS];
 static lv_obj_t *reboot_button;
 static lv_obj_t *reboot_label;
+static lv_obj_t *sleep_button;
+static lv_obj_t *sleep_label;
+
+static void refresh_dashboard(void);
 
 static void reboot_work_handler(struct k_work *work)
 {
@@ -82,6 +97,66 @@ static void reboot_button_event(lv_event_t *event)
 	reboot_confirm_until = now + APP_LCD_REBOOT_CONFIRM_MS;
 	lv_label_set_text(reboot_label, "Confirm reboot");
 	lv_obj_set_style_bg_color(reboot_button, lv_color_hex(0xc48628), 0);
+}
+
+static void sleep_button_event(lv_event_t *event)
+{
+	int ret;
+
+	ARG_UNUSED(event);
+
+	ret = display_set_brightness(lcd_panel, 0U);
+	if (ret < 0) {
+		LOG_WRN("LCD brightness could not be reduced: %d", ret);
+	}
+
+	ret = display_blanking_on(lcd_panel);
+	if (ret < 0) {
+		LOG_ERR("LCD standby failed: %d", ret);
+		(void)display_set_brightness(lcd_panel, UINT8_MAX);
+		return;
+	}
+
+	lcd_sleeping = true;
+	reset_reboot_button();
+	lv_label_set_text(sleep_label, "Sleeping");
+	lv_obj_add_state(sleep_button, LV_STATE_DISABLED);
+	LOG_INF("LCD entered standby");
+}
+
+static void wake_display_event(lv_event_t *event)
+{
+	lv_indev_t *indev = lv_event_get_user_data(event);
+
+	if (!lcd_sleeping) {
+		return;
+	}
+
+	lcd_wake_requested = true;
+	lv_indev_wait_release(indev);
+}
+
+static void wake_display(void)
+{
+	int ret;
+
+	lcd_wake_requested = false;
+	ret = display_blanking_off(lcd_panel);
+	if (ret < 0) {
+		LOG_ERR("LCD wake failed: %d", ret);
+		return;
+	}
+	ret = display_set_brightness(lcd_panel, UINT8_MAX);
+	if (ret < 0) {
+		LOG_WRN("LCD brightness could not be restored: %d", ret);
+	}
+
+	lcd_sleeping = false;
+	lv_label_set_text(sleep_label, "Sleep");
+	lv_obj_clear_state(sleep_button, LV_STATE_DISABLED);
+	refresh_dashboard();
+	lv_obj_invalidate(lv_screen_active());
+	LOG_INF("LCD woke from standby");
 }
 
 static lv_obj_t *make_label(lv_obj_t *parent, const char *text, int32_t x, int32_t y,
@@ -204,6 +279,18 @@ static void create_dashboard(void)
 	lv_obj_set_style_text_font(reboot_label, &lv_font_montserrat_14, 0);
 	lv_obj_set_style_text_color(reboot_label, lv_color_hex(0xf7fafc), 0);
 	lv_obj_center(reboot_label);
+	sleep_button = lv_button_create(screen);
+	lv_obj_set_pos(sleep_button, 535, 18);
+	lv_obj_set_size(sleep_button, 82, 38);
+	lv_obj_set_style_radius(sleep_button, 5, 0);
+	lv_obj_set_style_bg_color(sleep_button, lv_color_hex(0x263442), 0);
+	lv_obj_set_style_bg_color(sleep_button, lv_color_hex(0x2f6fed), LV_STATE_PRESSED);
+	lv_obj_add_event_cb(sleep_button, sleep_button_event, LV_EVENT_CLICKED, NULL);
+	sleep_label = lv_label_create(sleep_button);
+	lv_label_set_text(sleep_label, "Sleep");
+	lv_obj_set_style_text_font(sleep_label, &lv_font_montserrat_14, 0);
+	lv_obj_set_style_text_color(sleep_label, lv_color_hex(0xf7fafc), 0);
+	lv_obj_center(sleep_label);
 	make_label(screen, "M7", 738, 22, &lv_font_montserrat_14,
 		   lv_color_hex(0x2fda9a));
 
@@ -257,6 +344,7 @@ static void refresh_dashboard(void)
 static void app_lcd_thread_fn(void *arg1, void *arg2, void *arg3)
 {
 	const struct device *display = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+	lv_indev_t *indev;
 	uint32_t next_refresh = 0U;
 
 	ARG_UNUSED(arg1);
@@ -267,25 +355,33 @@ static void app_lcd_thread_fn(void *arg1, void *arg2, void *arg3)
 		LOG_ERR("LCD device is not ready");
 		return;
 	}
+	if (!device_is_ready(lcd_panel)) {
+		LOG_ERR("LCD panel device is not ready");
+		return;
+	}
 
 	create_dashboard();
+	for (indev = lv_indev_get_next(NULL); indev != NULL;
+	     indev = lv_indev_get_next(indev)) {
+		lv_indev_add_event_cb(indev, wake_display_event, LV_EVENT_PRESSED, indev);
+	}
 	refresh_dashboard();
 	lv_timer_handler();
-
-	if (display_blanking_off(display) < 0) {
-		LOG_WRN("LCD blanking could not be disabled");
-	}
 
 	LOG_INF("Local LCD dashboard started");
 	while (true) {
 		uint32_t now = k_uptime_get_32();
+
+		if (lcd_wake_requested) {
+			wake_display();
+		}
 
 		if (reboot_confirm_until != 0U &&
 		    (int32_t)(now - reboot_confirm_until) >= 0) {
 			reset_reboot_button();
 		}
 
-		if ((int32_t)(now - next_refresh) >= 0) {
+		if (!lcd_sleeping && (int32_t)(now - next_refresh) >= 0) {
 			refresh_dashboard();
 			next_refresh = now + APP_LCD_REFRESH_MS;
 		}
