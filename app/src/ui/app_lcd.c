@@ -27,6 +27,7 @@ LOG_MODULE_REGISTER(app_lcd, LOG_LEVEL_INF);
 #define APP_LCD_REFRESH_MS 500U
 #define APP_LCD_SCANNER_ROWS 5U
 #define APP_LCD_REBOOT_CONFIRM_MS 3000U
+#define APP_LCD_START_IN_STANDBY 1
 
 #if defined(CONFIG_LVGL) && DT_HAS_CHOSEN(zephyr_display)
 
@@ -65,6 +66,7 @@ static lv_obj_t *sleep_button;
 static lv_obj_t *sleep_label;
 
 static void refresh_dashboard(void);
+static int enter_standby(void);
 
 static void reboot_work_handler(struct k_work *work)
 {
@@ -99,11 +101,13 @@ static void reboot_button_event(lv_event_t *event)
 	lv_obj_set_style_bg_color(reboot_button, lv_color_hex(0xc48628), 0);
 }
 
-static void sleep_button_event(lv_event_t *event)
+static int enter_standby(void)
 {
 	int ret;
 
-	ARG_UNUSED(event);
+	if (lcd_sleeping) {
+		return 0;
+	}
 
 	ret = display_set_brightness(lcd_panel, 0U);
 	if (ret < 0) {
@@ -114,7 +118,7 @@ static void sleep_button_event(lv_event_t *event)
 	if (ret < 0) {
 		LOG_ERR("LCD standby failed: %d", ret);
 		(void)display_set_brightness(lcd_panel, UINT8_MAX);
-		return;
+		return ret;
 	}
 
 	lcd_sleeping = true;
@@ -122,6 +126,14 @@ static void sleep_button_event(lv_event_t *event)
 	lv_label_set_text(sleep_label, "Sleeping");
 	lv_obj_add_state(sleep_button, LV_STATE_DISABLED);
 	LOG_INF("LCD entered standby");
+	return 0;
+}
+
+static void sleep_button_event(lv_event_t *event)
+{
+	ARG_UNUSED(event);
+
+	(void)enter_standby();
 }
 
 static void wake_display_event(lv_event_t *event)
@@ -367,6 +379,9 @@ static void app_lcd_thread_fn(void *arg1, void *arg2, void *arg3)
 	}
 	refresh_dashboard();
 	lv_timer_handler();
+	if (APP_LCD_START_IN_STANDBY != 0) {
+		(void)enter_standby();
+	}
 
 	LOG_INF("Local LCD dashboard started");
 	while (true) {
