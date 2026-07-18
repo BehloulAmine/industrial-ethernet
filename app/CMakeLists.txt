@@ -4,6 +4,7 @@ project(industrial_ethernet)
 
 target_include_directories(app PRIVATE
   src/net
+  src/protocols/eip
   src/protocols/modbus
   src/ui
   src/web
@@ -18,3 +19,5 @@ target_sources(app PRIVATE
   src/ui/app_lcd.c
   src/web/app_web.c
 )
+
+add_subdirectory(src/protocols/eip)

@@ -309,18 +309,23 @@ Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-
 ### Phase 6 — EtherNet/IP (CIP)
 
 **Étape 6.1 — Stack EIP**
-- Zephyr n'a **pas** de stack EIP officielle → 2 options :
-  - **A)** Intégrer **OpENer** (Apache 2.0) — stack EIP open source légère
-  - **B)** Implémenter minimalement l'encapsulation : List Identity (UDP 44818) + Register Session + ListServices
-- **Choix recommandé** : OpENer compilé en lib externe, glue avec sockets Zephyr
+- Zephyr n'a pas de stack EIP officielle.
+- Choix retenu : **OpENer**, intégré comme sous-module Git dans `app/third_party/opener/`.
+- Le port Zephyr est isolé dans `app/src/protocols/eip/` : sockets `zsock`, horloges, mémoire et callbacks applicatifs.
+- TCP/UDP 44818 : encapsulation EtherNet/IP, découverte, sessions et messaging explicite CIP.
+- UDP 2222 : I/O implicites cycliques Class 1 via une connexion Exclusive Owner.
+- Après un clone : `git submodule update --init --recursive`.
 
 **Étape 6.2 — Objets CIP basiques**
-- Identity Object (0x01), TCP/IP Object (0xF5), Ethernet Link (0xF6)
-- Assembly Object pour mapper les registres en I/O implicite (Class1)
+- Objets standards OpENer : Identity (0x01), Assembly (0x04), TCP/IP Interface (0xF5), Ethernet Link (0xF6), Connection Manager et QoS.
+- **Input Assembly 100** : 20 octets, soit les 10 mots de la fenêtre scanner, lus par le PLC.
+- **Output Assembly 101** : 20 octets écrits cycliquement par le PLC dans ces mêmes 10 mots.
+- Le mapping partagé garantit la cohérence entre EtherNet/IP, Modbus Unit-ID 2 et le webserver REST.
+- Les échanges multi-octets des assemblies utilisent l'ordre little-endian CIP.
 
-**Test :** RSLinx ou EIPScan PC scanne et identifie la carte.
+**Test :** `python tools/eip_probe.py <ip-carte>`, Wireshark (`enip || cip`), puis RSLinx, Studio 5000 ou EIPScanner pour ouvrir une connexion Class 1 sur 100/101.
 
-**Livrable :** la carte répond aux requêtes EIP (List Identity, Get Attributes Single).
+**Livrable :** la carte est un device EtherNet/IP identifiable, répond au messaging explicite et échange 10 mots cycliques via les assemblies 100/101.
 
 ---
 

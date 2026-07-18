@@ -318,6 +318,8 @@ static void create_dashboard(void)
 		   lv_color_hex(0x708399));
 	make_label(screen, "MODBUS TCP 502", 110, 449, &lv_font_montserrat_14,
 		   lv_color_hex(0x708399));
+	make_label(screen, "EIP 44818", 270, 449, &lv_font_montserrat_14,
+		   lv_color_hex(0x708399));
 }
 
 static void refresh_dashboard(void)

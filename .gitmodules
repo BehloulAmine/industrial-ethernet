@@ -1,0 +1,3 @@
+[submodule "app/third_party/opener"]
+	path = app/third_party/opener
+	url = https://github.com/EIPStackGroup/OpENer.git

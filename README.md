@@ -24,8 +24,24 @@ La branche actuelle correspond au bring-up M7 avec :
 - Ethernet IPv4 avec DHCP ou IP statique persistée ;
 - shell UART avec commandes `ip show`, `ip dhcp`, `ip static`, `uptime` et `reboot` ;
 - serveur Modbus TCP sur le port 502, unit-ID 1 ;
+- device EtherNet/IP OpENer sur TCP/UDP 44818 et I/O UDP 2222 ;
+- assemblies Class 1 : Input 100 et Output 101, chacune reliée aux 10 mots de la fenêtre scanner ;
 - registres Modbus exposant la configuration réseau, l'IP active, l'uptime, l'état du lien et un compteur de connexions ;
 - stockage `settings` via NVS sur la QSPI externe, pour éviter d'utiliser un secteur de flash interne.
+
+Test EtherNet/IP depuis le PC, après avoir flashé la carte :
+
+```powershell
+python tools/eip_probe.py 192.168.0.3
+```
+
+Le probe vérifie `ListIdentity`, `RegisterSession` et lit le nom produit avec
+`Get_Attribute_Single` sur l'Identity Object. Wireshark peut décoder les échanges
+avec le filtre `enip || cip`.
+
+Pour un échange cyclique avec un PLC ou un scanner EtherNet/IP, configurer une
+connexion Exclusive Owner avec 20 octets T-to-O sur l'Assembly 100 et 20 octets
+O-to-T sur l'Assembly 101. Les mots sont encodés en little-endian.
 
 ## Prérequis
 - **Python 3.12** disponible dans le PATH
@@ -50,6 +66,7 @@ sudo apt install --no-install-recommends git cmake ninja-build gperf \
 ```bash
 git clone https://github.com/behloulmedamine/industrial-ethernet.git industrial-ethernet
 cd industrial-ethernet
+git submodule update --init --recursive
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -194,6 +211,7 @@ usbipd detach --busid 3-2
 ```bash
 git clone https://github.com/behloulmedamine/industrial-ethernet.git industrial-ethernet
 cd industrial-ethernet
+git submodule update --init --recursive
 
 # Créer le venv Python
 py -3.12 -m venv .venv
