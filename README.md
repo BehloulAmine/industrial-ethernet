@@ -26,6 +26,7 @@ La branche actuelle correspond au bring-up M7 avec :
 - serveur Modbus TCP sur le port 502, unit-ID 1 ;
 - device EtherNet/IP OpENer sur TCP/UDP 44818 et I/O UDP 2222 ;
 - assemblies Class 1 : Config 1 (0 octet), Output 100 et Input 101, chacune reliée aux 10 mots de la fenêtre scanner ;
+- au démarrage, la fenêtre scanner et les assemblies EIP sont mappées vers les registres libres `REG10..REG19` ;
 - registres Modbus exposant la configuration réseau, l'IP active, l'uptime, l'état du lien et un compteur de connexions ;
 - stockage `settings` via NVS sur la QSPI externe, pour éviter d'utiliser un secteur de flash interne.
 
@@ -104,6 +105,18 @@ west update
 west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- \
   -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf
 ```
+
+Pour une image de diagnostic réseau temporaire (commandes UART `net conn`,
+`net mem` et `net stats`) :
+
+```bash
+west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- \
+  -DSHIELD=st_b_lcd40_dsi1_mb1166 \
+  '-DEXTRA_CONF_FILE=lcd.conf;diagnostics.conf'
+```
+
+`diagnostics.conf` est destiné au développement : il ajoute des outils utiles
+pour analyser les sockets et buffers réseau, mais augmente la taille de l'image.
 
 Si la dalle porte la révision A09, utiliser le shield
 `st_b_lcd40_dsi1_mb1166_a09`. Le LCD est piloté par le M7, car c'est la cible

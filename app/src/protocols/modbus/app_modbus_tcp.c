@@ -122,12 +122,9 @@ static void sync_holding_regs_from_saved_cfg(void)
 
 static void init_scanner_mapping_defaults(void)
 {
-	holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + 0] = APP_MB_HREG_MODE;
-	holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + 1] = APP_MB_HREG_IP_MSW;
-	holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + 2] = APP_MB_HREG_IP_LSW;
-
-	for (uint16_t i = 3; i < APP_MB_HREG_SCANNER_MAP_COUNT; i++) {
-		holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + i] = APP_MB_SCAN_MAP_FREE;
+	for (uint16_t i = 0; i < APP_MB_HREG_SCANNER_MAP_COUNT; i++) {
+		holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + i] =
+			APP_MB_HREG_USER_DATA_BASE + i;
 	}
 }
 

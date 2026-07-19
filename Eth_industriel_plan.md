@@ -183,10 +183,8 @@ Dans cette phase, la carte reste **Modbus TCP server**. Le "scanner" est volonta
   - `registers[40 + i]` contient directement l'adresse du holding register exposé par `scanner_regs[i]`.
   - `0xFFFF` = RAM locale, avec lecture/écriture dans une valeur propre à `scanner_regs[i]`.
 - Initialiser le mapping par défaut au boot :
-  - `registers[40] = 1` → `scanner_regs[0]` expose `registers[1]`, donc le mode IP.
-  - `registers[41] = 2` → `scanner_regs[1]` expose `registers[2]`, donc l'adresse IP mot haut.
-  - `registers[42] = 3` → `scanner_regs[2]` expose `registers[3]`, donc l'adresse IP mot bas.
-  - `registers[43..49] = 0xFFFF` → `scanner_regs[3..9]` utilisent leur RAM locale.
+  - `registers[40..49] = 10..19` → `scanner_regs[0..9]` exposent les registres libres `registers[10..19]`.
+  - Ce choix protège la configuration réseau (`registers[1..7]`) et les commandes (`registers[8..9]`) des écritures cycliques externes.
 - Le device externe peut modifier ce mapping en runtime en écrivant dans `registers[40..49]` via Unit-ID 1.
 
 **Étape 3.3 — Fenêtre scanner dynamique**
@@ -195,12 +193,12 @@ Dans cette phase, la carte reste **Modbus TCP server**. Le "scanner" est volonta
 - Quand un device externe écrit `scanner_regs[i]` via Unit-ID 2, la carte écrit dans la donnée interne indiquée par `registers[40 + i]`.
 - Si `registers[40 + i] = 0xFFFF`, `scanner_regs[i]` lit/écrit une valeur RAM locale.
 - Exemple :
-  - au boot : `registers[40] = 1`, donc `scanner_regs[0]` lit/écrit le mode IP.
+  - au boot : `registers[40] = 10`, donc `scanner_regs[0]` lit/écrit `registers[10]`.
   - si le device externe écrit ensuite `registers[40] = 4` et `registers[41] = 5`, alors `scanner_regs[0]` et `scanner_regs[1]` exposent le masque réseau.
-  - une écriture dans `scanner_regs[0]` met alors à jour le mot haut du masque, pas le mode IP.
+  - une écriture dans `scanner_regs[0]` met alors à jour le mot haut du masque, pas `registers[10]`.
 - Le device externe peut lire/écrire périodiquement les adresses `0..9` via Unit-ID 2 sans connaître les registres internes réels.
 
-Exemple : pour `192.168.1.45`, le mapping IP par défaut donne `scanner_regs[1] = 0xC0A8` et `scanner_regs[2] = 0x012D`.
+Par défaut, les valeurs de `scanner_regs[0..9]` sont les valeurs brutes de `registers[10..19]`.
 
 **Étape 3.4 — Test avec device externe**
 - Depuis un PC ou une PLC, lire `registers[40..49]` via Unit-ID 1 pour vérifier le mapping scanner courant.
