@@ -25,7 +25,7 @@ La branche actuelle correspond au bring-up M7 avec :
 - shell UART avec commandes `ip show`, `ip dhcp`, `ip static`, `uptime` et `reboot` ;
 - serveur Modbus TCP sur le port 502, unit-ID 1 ;
 - device EtherNet/IP OpENer sur TCP/UDP 44818 et I/O UDP 2222 ;
-- assemblies Class 1 : Input 100 et Output 101, chacune reliée aux 10 mots de la fenêtre scanner ;
+- assemblies Class 1 : Config 1 (0 octet), Output 100 et Input 101, chacune reliée aux 10 mots de la fenêtre scanner ;
 - registres Modbus exposant la configuration réseau, l'IP active, l'uptime, l'état du lien et un compteur de connexions ;
 - stockage `settings` via NVS sur la QSPI externe, pour éviter d'utiliser un secteur de flash interne.
 
@@ -40,8 +40,10 @@ Le probe vérifie `ListIdentity`, `RegisterSession` et lit le nom produit avec
 avec le filtre `enip || cip`.
 
 Pour un échange cyclique avec un PLC ou un scanner EtherNet/IP, configurer une
-connexion Exclusive Owner avec 20 octets T-to-O sur l'Assembly 100 et 20 octets
-O-to-T sur l'Assembly 101. Les mots sont encodés en little-endian.
+connexion Exclusive Owner avec 20 octets O-to-T sur l'Assembly 100 et 20 octets
+T-to-O sur l'Assembly 101. Utiliser l'Assembly 1 comme configuration vide,
+activer le Run/Idle header seulement en O-to-T et commencer en Point-to-Point
+dans les deux directions. Les mots sont encodés en little-endian.
 
 ## Prérequis
 - **Python 3.12** disponible dans le PATH

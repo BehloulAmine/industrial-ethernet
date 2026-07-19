@@ -147,8 +147,8 @@ static void eip_thread_fn(void *arg1, void *arg2, void *arg3)
 		return;
 	}
 
-	LOG_INF("OpENer ready: TCP/UDP 44818, I/O UDP 2222, assemblies %u/%u",
-		APP_EIP_INPUT_ASSEMBLY, APP_EIP_OUTPUT_ASSEMBLY);
+	LOG_INF("OpENer ready: TCP/UDP 44818, I/O UDP 2222, output=%u input=%u",
+		APP_EIP_OUTPUT_ASSEMBLY, APP_EIP_INPUT_ASSEMBLY);
 	while (NetworkHandlerProcessCyclic() == kEipStatusOk) {
 		HandleApplication();
 	}
@@ -179,7 +179,8 @@ uint16_t app_eip_connection_count(void)
 
 EipStatus ApplicationInitialization(void)
 {
-	if (CreateAssemblyObject(APP_EIP_INPUT_ASSEMBLY, input_assembly,
+	if (CreateAssemblyObject(APP_EIP_CONFIG_ASSEMBLY, NULL, 0) == NULL ||
+	    CreateAssemblyObject(APP_EIP_INPUT_ASSEMBLY, input_assembly,
 				 sizeof(input_assembly)) == NULL ||
 	    CreateAssemblyObject(APP_EIP_OUTPUT_ASSEMBLY, output_assembly,
 				 sizeof(output_assembly)) == NULL) {
@@ -187,7 +188,8 @@ EipStatus ApplicationInitialization(void)
 	}
 
 	ConfigureExclusiveOwnerConnectionPoint(0, APP_EIP_OUTPUT_ASSEMBLY,
-					 APP_EIP_INPUT_ASSEMBLY, 0);
+					 APP_EIP_INPUT_ASSEMBLY,
+					 APP_EIP_CONFIG_ASSEMBLY);
 	return kEipStatusOk;
 }
 
@@ -226,7 +228,8 @@ EipStatus AfterAssemblyDataReceived(CipInstance *instance)
 			i, sys_get_le16(&output_assembly[i * sizeof(uint16_t)]));
 
 		if (ret < 0) {
-			LOG_WRN("Assembly 101 write failed at word %u: %d", i, ret);
+			LOG_WRN("Assembly %u write failed at word %u: %d",
+				APP_EIP_OUTPUT_ASSEMBLY, i, ret);
 			return kEipStatusError;
 		}
 	}

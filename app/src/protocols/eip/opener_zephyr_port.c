@@ -46,6 +46,17 @@ int app_eip_setsockopt(int socket, int level, int option_name,
 		return 0;
 	}
 
+	/* OpENer passes an IPv4 address, while Zephyr expects an ip_mreq. */
+	if (level == IPPROTO_IP && option_name == IP_MULTICAST_IF &&
+	    option_value != NULL && option_length == sizeof(struct net_in_addr)) {
+		struct net_ip_mreq request = { 0 };
+
+		memcpy(&request.imr_interface, option_value,
+		       sizeof(request.imr_interface));
+		return zsock_setsockopt(socket, level, option_name, &request,
+					 sizeof(request));
+	}
+
 	int ret = zsock_setsockopt(socket, level, option_name, option_value,
 				   option_length);
 
@@ -100,7 +111,7 @@ int SetSocketToNonBlocking(int socket_handle)
 
 int SetQosOnSocket(const int socket_handle, CipUsint qos_value)
 {
-	int tos = qos_value << 2;
+	uint8_t tos = qos_value << 2;
 
 	return zsock_setsockopt(socket_handle, IPPROTO_IP, IP_TOS,
 				&tos, sizeof(tos));

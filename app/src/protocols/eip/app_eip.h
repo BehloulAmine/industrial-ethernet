@@ -3,8 +3,9 @@
 
 #include <stdint.h>
 
-#define APP_EIP_INPUT_ASSEMBLY 100U
-#define APP_EIP_OUTPUT_ASSEMBLY 101U
+#define APP_EIP_CONFIG_ASSEMBLY 1U
+#define APP_EIP_OUTPUT_ASSEMBLY 100U
+#define APP_EIP_INPUT_ASSEMBLY 101U
 #define APP_EIP_ASSEMBLY_WORD_COUNT 10U
 
 int app_eip_start(void);

@@ -318,8 +318,9 @@ Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-
 
 **Étape 6.2 — Objets CIP basiques**
 - Objets standards OpENer : Identity (0x01), Assembly (0x04), TCP/IP Interface (0xF5), Ethernet Link (0xF6), Connection Manager et QoS.
-- **Input Assembly 100** : 20 octets, soit les 10 mots de la fenêtre scanner, lus par le PLC.
-- **Output Assembly 101** : 20 octets écrits cycliquement par le PLC dans ces mêmes 10 mots.
+- **Configuration Assembly 1** : assembly vide de 0 octet pour les outils qui exigent un chemin de configuration.
+- **Output Assembly 100 (O→T)** : 20 octets écrits cycliquement par le PLC dans les 10 mots de la fenêtre scanner.
+- **Input Assembly 101 (T→O)** : 20 octets, soit les 10 mots de la fenêtre scanner, lus par le PLC.
 - Le mapping partagé garantit la cohérence entre EtherNet/IP, Modbus Unit-ID 2 et le webserver REST.
 - Les échanges multi-octets des assemblies utilisent l'ordre little-endian CIP.
 
