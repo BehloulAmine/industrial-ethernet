@@ -36,8 +36,8 @@ LOG_MODULE_REGISTER(app_modbus_tcp, LOG_LEVEL_INF);
 #define APP_MODBUS_STATUS_PENDING 0x7fffU
 
 static uint16_t holding_regs[APP_MODBUS_HOLDING_REG_COUNT] = {
-	[0] = 0x0747,
-	[1] = 1,
+	[APP_MB_HREG_SIGNATURE] = APP_MODBUS_MAP_SIGNATURE,
+	[APP_MB_HREG_MODE] = 1,
 };
 
 static struct modbus_adu tcp_adu;
@@ -110,7 +110,7 @@ static void sync_holding_regs_from_saved_cfg(void)
 		return;
 	}
 
-	holding_regs[APP_MB_HREG_SIGNATURE] = 0x0747;
+	holding_regs[APP_MB_HREG_SIGNATURE] = APP_MODBUS_MAP_SIGNATURE;
 	holding_regs[APP_MB_HREG_MODE] = (uint16_t)saved.mode;
 	holding_regs[APP_MB_HREG_IP_MSW] = ipv4_word_msw(saved.ip);
 	holding_regs[APP_MB_HREG_IP_LSW] = ipv4_word_lsw(saved.ip);
@@ -230,7 +230,7 @@ static int input_reg_rd(uint16_t addr, uint16_t *reg)
 
 	switch (addr) {
 	case APP_MB_IREG_SIGNATURE:
-		*reg = 0x0747;
+		*reg = APP_MODBUS_MAP_SIGNATURE;
 		break;
 	case APP_MB_IREG_MAP_VERSION:
 		*reg = APP_MODBUS_MAP_VERSION;

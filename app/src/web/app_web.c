@@ -493,60 +493,124 @@ static int handle_http_request(int client, char *req)
 			     "{\"error\":\"method_not_allowed\"}");
 }
 
+static int app_web_create_listener(int family)
+{
+	int server;
+
+	server = zsock_socket(family, SOCK_STREAM, IPPROTO_TCP);
+	if (server < 0) {
+		LOG_ERR("HTTP IPv%d socket failed: %d", family == AF_INET6 ? 6 : 4,
+			errno);
+		return -errno;
+	}
+
+	if (family == AF_INET6) {
+		struct sockaddr_in6 bind_addr = {
+			.sin6_family = AF_INET6,
+			.sin6_addr = IN6ADDR_ANY_INIT,
+			.sin6_port = htons(APP_WEB_PORT),
+		};
+		int ipv6_only = 1;
+
+		if (zsock_setsockopt(server, IPPROTO_IPV6, IPV6_V6ONLY,
+				     &ipv6_only, sizeof(ipv6_only)) < 0) {
+			LOG_ERR("HTTP IPv6-only option failed: %d", errno);
+			(void)zsock_close(server);
+			return -errno;
+		}
+		if (zsock_bind(server, (struct net_sockaddr *)&bind_addr,
+			       sizeof(bind_addr)) < 0) {
+			LOG_ERR("HTTP IPv6 bind port %d failed: %d", APP_WEB_PORT,
+				errno);
+			(void)zsock_close(server);
+			return -errno;
+		}
+	} else {
+		struct sockaddr_in bind_addr = {
+			.sin_family = AF_INET,
+			.sin_addr.s_addr = htonl(INADDR_ANY),
+			.sin_port = htons(APP_WEB_PORT),
+		};
+
+		if (zsock_bind(server, (struct net_sockaddr *)&bind_addr,
+			       sizeof(bind_addr)) < 0) {
+			LOG_ERR("HTTP IPv4 bind port %d failed: %d", APP_WEB_PORT,
+				errno);
+			(void)zsock_close(server);
+			return -errno;
+		}
+	}
+
+	if (zsock_listen(server, APP_WEB_BACKLOG) < 0) {
+		LOG_ERR("HTTP IPv%d listen failed: %d", family == AF_INET6 ? 6 : 4,
+			errno);
+		(void)zsock_close(server);
+		return -errno;
+	}
+
+	return server;
+}
+
+static void app_web_serve_client(int server)
+{
+	struct sockaddr_storage client_addr;
+	net_socklen_t client_addr_len = sizeof(client_addr);
+	char req[APP_WEB_REQ_BUF_SIZE];
+	int client;
+	int len;
+
+	client = zsock_accept(server, (struct net_sockaddr *)&client_addr,
+			      &client_addr_len);
+	if (client < 0) {
+		LOG_ERR("HTTP accept failed: %d", errno);
+		return;
+	}
+
+	len = zsock_recv(client, req, sizeof(req) - 1U, 0);
+	if (len > 0) {
+		req[len] = '\0';
+		(void)handle_http_request(client, req);
+	}
+
+	(void)zsock_close(client);
+}
+
 static void app_web_thread_fn(void *arg1, void *arg2, void *arg3)
 {
-	struct sockaddr_in bind_addr = {
-		.sin_family = AF_INET,
-		.sin_addr.s_addr = htonl(INADDR_ANY),
-		.sin_port = htons(APP_WEB_PORT),
-	};
-	int server;
+	struct zsock_pollfd listeners[2] = { 0 };
 
 	ARG_UNUSED(arg1);
 	ARG_UNUSED(arg2);
 	ARG_UNUSED(arg3);
 
-	server = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (server < 0) {
-		LOG_ERR("HTTP socket failed: %d", errno);
+	listeners[0].fd = app_web_create_listener(AF_INET);
+	if (listeners[0].fd < 0) {
 		return;
 	}
+	listeners[0].events = ZSOCK_POLLIN;
 
-	if (zsock_bind(server, (struct net_sockaddr *)&bind_addr, sizeof(bind_addr)) < 0) {
-		LOG_ERR("HTTP bind port %d failed: %d", APP_WEB_PORT, errno);
-		(void)zsock_close(server);
+	listeners[1].fd = app_web_create_listener(AF_INET6);
+	if (listeners[1].fd < 0) {
+		(void)zsock_close(listeners[0].fd);
 		return;
 	}
+	listeners[1].events = ZSOCK_POLLIN;
 
-	if (zsock_listen(server, APP_WEB_BACKLOG) < 0) {
-		LOG_ERR("HTTP listen failed: %d", errno);
-		(void)zsock_close(server);
-		return;
-	}
-
-	LOG_INF("HTTP dashboard listening on port %d", APP_WEB_PORT);
+	LOG_INF("HTTP dashboard listening on IPv4/IPv6 port %d", APP_WEB_PORT);
 
 	while (true) {
-		struct sockaddr_in client_addr;
-		net_socklen_t client_addr_len = sizeof(client_addr);
-		char req[APP_WEB_REQ_BUF_SIZE];
-		int client;
-		int len;
+		int ret = zsock_poll(listeners, ARRAY_SIZE(listeners), -1);
 
-		client = zsock_accept(server, (struct net_sockaddr *)&client_addr,
-				      &client_addr_len);
-		if (client < 0) {
-			LOG_ERR("HTTP accept failed: %d", errno);
+		if (ret < 0) {
+			LOG_ERR("HTTP poll failed: %d", errno);
 			continue;
 		}
 
-		len = zsock_recv(client, req, sizeof(req) - 1U, 0);
-		if (len > 0) {
-			req[len] = '\0';
-			(void)handle_http_request(client, req);
+		for (size_t i = 0; i < ARRAY_SIZE(listeners); i++) {
+			if ((listeners[i].revents & ZSOCK_POLLIN) != 0) {
+				app_web_serve_client(listeners[i].fd);
+			}
 		}
-
-		(void)zsock_close(client);
 	}
 }
 

@@ -8,11 +8,11 @@ Ce plan décrit la réalisation d'un **prototype embarqué industriel** tournant
 
 Le projet vise deux objectifs complémentaires :
 
-1. **Valider la faisabilité d'une stack industrielle complète sous Zephyr** : TCP/IP, Modbus TCP (server + scanner via Unit-ID 2), EtherNet/IP, DPWS/WS-Discovery, DHCP, mDNS, HTTPS, gestion de login.
+1. **Valider la faisabilité d'une stack industrielle complète sous Zephyr** : TCP/IP IPv4/IPv6, Modbus TCP (server + scanner via Unit-ID 2), EtherNet/IP, DPWS/WS-Discovery, DHCP, mDNS, HTTPS, gestion de login.
 2. **Démontrer un niveau de sécurité proche du monde industriel** : firmware signé, secure boot avec chaîne de confiance, protection du code en flash.
 
 Le résultat attendu est un **device réseau découvrable automatiquement**, exposant :
-- un **webserver HTTPS** avec interface de supervision et d'administration (registres, diagnostics, FW update),
+- un **webserver HTTP/HTTPS dual-stack IPv4/IPv6** avec interface de supervision et d'administration (registres, diagnostics, FW update),
 - un **serveur Modbus TCP** (port 502) avec Unit-ID 1 pour les registres principaux et Unit-ID 2 pour la zone scanner,
 - un **device EtherNet/IP** identifiable par un automate Rockwell ou un outil EIPScan,
 - un **endpoint WS-Discovery** (DPWS, port UDP 3702) permettant la découverte automatique sur le réseau local.
@@ -21,7 +21,7 @@ Le résultat attendu est un **device réseau découvrable automatiquement**, exp
 
 ### 1.2 — Résumé du plan
 
-Le plan est structuré en **12 phases progressives**, chacune apportant une couche fonctionnelle ou sécuritaire supplémentaire. Les phases sont conçues pour être validées indépendamment, chaque livrable étant testable avant de passer à la suivante.
+Le plan est structuré en **phases 0 à 13**, chacune apportant une couche fonctionnelle ou sécuritaire supplémentaire. Les phases sont conçues pour être validées indépendamment, chaque livrable étant testable avant de passer à la suivante.
 
 | Phase | Thème | Livrable clé |
 |---|---|---|
@@ -32,12 +32,13 @@ Le plan est structuré en **12 phases progressives**, chacune apportant une couc
 | **Phase 4** | Webserver HTTP + REST API + frontend | Dashboard web + registres/scanner pilotables |
 | **Phase 5** | Dashboard LCD local (Cortex-M7, LVGL) | LCD affichant IP, services et fenêtre scanner |
 | **Phase 6** | EtherNet/IP via OpENer | Device CIP identifiable par RSLinx / EIPScan |
-| **Phase 7** | DPWS / WS-Discovery (UDP multicast 3702) | Découverte auto depuis WSDiscoveryTool |
-| **Phase 8** | Sécurité HTTP : login, tokens, HTTPS/TLS | Interface protégée par login + TLS (certif ECC P-256) |
-| **Phase 9** | Firmware Update + rollback MCUboot | Upload d'un `.bin` signé via le web, rollback auto |
-| **Phase 10** | Signature ECDSA des images | Seule une image signée par la clé légitime s'installe |
-| **Phase 11** | Secure Boot (RDP, OTP, chain of trust) | Chaîne ROM → MCUboot → App inviolable |
-| **Phase 12** | Polish : logs, diagnostics, mDNS, doc | Démo finale complète + hostname `industrial-ethernet.local` |
+| **Phase 7** | IPv6, identification et HTTP dual-stack | Ping IPv6, commande `ident`, dashboard sur IPv4 et IPv6 |
+| **Phase 8** | DPWS / WS-Discovery (UDP multicast 3702) | Découverte auto depuis WSDiscoveryTool |
+| **Phase 9** | Sécurité HTTP : login, tokens, HTTPS/TLS | Interface protégée par login + TLS (certif ECC P-256) |
+| **Phase 10** | Firmware Update + rollback MCUboot | Upload d'un `.bin` signé via le web, rollback auto |
+| **Phase 11** | Signature ECDSA des images | Seule une image signée par la clé légitime s'installe |
+| **Phase 12** | Secure Boot (RDP, OTP, chain of trust) | Chaîne ROM → MCUboot → App inviolable |
+| **Phase 13** | Polish : logs, diagnostics, mDNS, doc | Démo finale complète + hostname `industrial-ethernet.local` |
 
 
 **Carte retenue : STM32H747I-DISCO** — Dual-core Cortex-M7 @ 480 MHz + Cortex-M4 @ 240 MHz, 1 MB SRAM + 32 MB SDRAM, 2 MB Flash + 128 MB QSPI, Ethernet PHY + RJ45 intégrés, LCD 4" tactile, crypto HW complet (AES-256/HASH/RNG/PKA), support Zephyr ★★★★★.
@@ -328,9 +329,49 @@ Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-
 
 ---
 
-### Phase 7 — DPWS / WS-Discovery (optionnel mais cool)
+### Phase 7 — IPv6, identification et HTTP dual-stack
 
-**Étape 7.1 — WS-Discovery minimaliste**
+Objectif : ajouter IPv6 sans supprimer IPv4, centraliser l'identité de la carte et rendre le dashboard accessible sur les deux familles d'adresses.
+
+**Étape 7.1 — Activer IPv6 dans Zephyr**
+```kconfig
+CONFIG_NET_IPV6=y
+CONFIG_NET_IPV6_ND=y
+CONFIG_NET_IPV6_DAD=y
+CONFIG_NET_IPV6_MLD=y
+```
+- Zephyr génère automatiquement une adresse IPv6 link-local `fe80::/64` à partir de la MAC.
+- Neighbor Discovery (ND) assure la résolution des voisins IPv6.
+- Duplicate Address Detection (DAD) valide l'adresse avant son passage à l'état `preferred`.
+- Multicast Listener Discovery (MLD) prépare l'interface pour les protocoles multicast IPv6.
+- Test Windows : relever l'index Ethernet avec `netsh interface ipv6 show interfaces`, puis exécuter `ping -6 <ipv6-link-local>%<index>`.
+
+**Étape 7.2 — Centraliser l'identification de la carte**
+- Ajouter `app/src/core/ident.c` et `ident.h`.
+- Centraliser le nom du device, le hostname, le fabricant, le modèle et la version firmware `MAJOR.MINOR.PATCH`.
+- Lire l'identifiant matériel STM32 via `hwinfo_get_device_id()`.
+- Exposer la MAC, l'IPv4 active, l'IPv6 link-local et un UUID stable dérivé de la MAC.
+- Ajouter la commande shell `ident` pour afficher toutes ces informations.
+- Conserver les identifiants propres aux protocoles dans leurs modules respectifs : numéro de série et Product Code CIP dans EtherNet/IP, signature et version du mapping dans Modbus.
+
+**Étape 7.3 — Serveur HTTP dual-stack**
+- Conserver le listener IPv4 `0.0.0.0:80`.
+- Ajouter un listener IPv6 `[::]:80` avec `IPV6_V6ONLY`.
+- Utiliser `zsock_poll()` dans l'unique thread web pour attendre les deux listeners sans dupliquer le traitement HTTP/REST.
+- Valider l'accès IPv4 avec `http://192.168.0.3/`.
+- Valider l'accès IPv6 link-local sous Windows avec :
+  ```cmd
+  curl.exe -g "http://[fe80::80:e1ff:fe4c:b2d7%25<index>]/"
+  ```
+- Une adresse link-local exige un identifiant de zone. Certains navigateurs Chromium refusent cette syntaxe ; `curl` permet de valider le serveur indépendamment de cette limitation.
+
+**Livrable :** la carte répond au ping IPv4/IPv6, expose son identité via la commande `ident` et sert le même dashboard HTTP sur IPv4 et IPv6.
+
+---
+
+### Phase 8 — DPWS / WS-Discovery (optionnel mais cool)
+
+**Étape 8.1 — WS-Discovery minimaliste**
 - Pas de stack DPWS complète dans Zephyr → implémenter manuellement :
   - Listener UDP multicast 239.255.255.250:3702
   - Répondre aux `<Probe>` SOAP avec un `<ProbeMatch>` contenant l'URL HTTP
@@ -342,20 +383,20 @@ Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-
 
 ---
 
-### Phase 8 — Sécurité : Login & HTTPS
+### Phase 9 — Sécurité : Login & HTTPS
 
-**Étape 8.1 — Login management**
+**Étape 9.1 — Login management**
 - Subsys **settings** pour stocker user/password hashé (SHA-256 + salt)
 - Endpoint `POST /api/login` → renvoie un token (UUID random via TRNG HW)
 - Middleware HTTP : routes mutantes REST (`PUT /api/registers/<id>`, `PUT /api/scanner/<id>`, `POST /api/commands/*`) exigent header `Authorization: Bearer <token>`
 - Tokens en RAM avec expiration (timer Zephyr)
 
-**Étape 8.2 — Changement mot de passe**
+**Étape 9.2 — Changement mot de passe**
 - Endpoint `POST /api/password` (auth requise)
 - Validation force (longueur min, charset)
 - Première connexion → forcer le changement (comme ATV)
 
-**Étape 8.3 — HTTPS**
+**Étape 9.3 — HTTPS**
 ```kconfig
 CONFIG_MBEDTLS=y
 CONFIG_MBEDTLS_TLS_VERSION_1_2=y
@@ -370,9 +411,9 @@ CONFIG_HTTP_SERVER_TLS=y
 
 ---
 
-### Phase 9 — Firmware Update
+### Phase 10 — Firmware Update
 
-**Étape 9.1 — MCUboot bootloader**
+**Étape 10.1 — MCUboot bootloader**
 - Activer dans Zephyr : `west build` avec `-DCONFIG_BOOTLOADER_MCUBOOT=y`
 - Partition layout :
   - `boot_partition` (MCUboot, ~64 KB)
@@ -381,35 +422,35 @@ CONFIG_HTTP_SERVER_TLS=y
   - `scratch_partition`
   - `storage_partition` (LittleFS — settings, certs, www)
 
-**Étape 9.2 — Endpoint upload**
+**Étape 10.2 — Endpoint upload**
 - `POST /api/firmware` (multipart ou raw binary)
 - Auth requise + check size
 - Écriture progressive en flash via API `flash_img_*` de Zephyr
 - À la fin : `boot_request_upgrade()` puis `sys_reboot()`
 
-**Étape 9.3 — UI**
+**Étape 10.3 — UI**
 - Page web "Update" : sélecteur de fichier `.bin` signé, progress bar via SSE ou polling
 - Affichage version actuelle (compilée dans le binaire via `APP_VERSION`)
 
-**Étape 9.4 — Rollback automatique**
+**Étape 10.4 — Rollback automatique**
 - MCUboot teste l'image — si l'app ne valide pas (`boot_write_img_confirmed()`) dans X secondes, revert au slot précédent
 
 **Livrable :** upload de firmware par le web, reboot, rollback si échec.
 
 ---
 
-### Phase 10 — Signature Check (image signing)
+### Phase 11 — Signature Check (image signing)
 
-**Étape 10.1 — Génération de clés**
+**Étape 11.1 — Génération de clés**
 - `imgtool keygen -k ecdsa-p256-priv.pem -t ecdsa-p256` (script host)
 - Clé publique injectée dans MCUboot (`MCUBOOT_SIGNATURE_KEY_FILE`)
 
-**Étape 10.2 — Signature build**
+**Étape 11.2 — Signature build**
 - `west build` produit un `.bin` non signé
 - `imgtool sign --key ecdsa-p256-priv.pem --version 1.0.0 --header-size 0x200 --slot-size 0x80000 zephyr.bin signed.bin`
 - Intégration dans CMake post-build pour automatiser
 
-**Étape 10.3 — Vérif côté MCU**
+**Étape 11.3 — Vérif côté MCU**
 - MCUboot vérifie la signature ECDSA au boot via mbedTLS
 - Image non signée / mauvaise clé → refus de boot, fallback slot précédent
 
@@ -417,22 +458,22 @@ CONFIG_HTTP_SERVER_TLS=y
 
 ---
 
-### Phase 11 — Secure Boot (chain of trust complète)
+### Phase 12 — Secure Boot (chain of trust complète)
 
-**Étape 11.1 — RDP / PCROP STM32**
+**Étape 12.1 — RDP / PCROP STM32**
 - Activer Read-Out Protection niveau 1 ou 2 sur STM32H7 (option bytes)
 - Empêche le dump de la flash via SWD
 
-**Étape 11.2 — Root of Trust**
+**Étape 12.2 — Root of Trust**
 - Clé publique MCUboot stockée en **OTP** (option bytes / Flash protégée)
 - Hash de MCUboot vérifié au démarrage par le ROM bootloader STM32 (RSS — Root Secure Service)
 
-**Étape 11.3 — Chain**
+**Étape 12.3 — Chain**
 1. ROM ST → vérifie MCUboot (RSS / option SBSFU)
 2. MCUboot → vérifie l'app signée
 3. App → vérifie le filesystem (signature des assets www optionnel)
 
-**Étape 11.4 — Encryption optionnelle**
+**Étape 12.4 — Encryption optionnelle**
 - MCUboot supporte image chiffrée AES-CTR avec clé dérivée ECIES
 - À activer si la démo vise IP protection
 
@@ -440,21 +481,21 @@ CONFIG_HTTP_SERVER_TLS=y
 
 ---
 
-### Phase 12 — Polish & Démo finale
+### Phase 13 — Polish & Démo finale
 
-**Étape 12.1 — Logs structurés**
+**Étape 13.1 — Logs structurés**
 - `CONFIG_LOG=y` + backend UART
 - Niveau par module : net, modbus, http, security
 
-**Étape 12.2 — Diagnostics**
+**Étape 13.2 — Diagnostics**
 - Endpoint `GET /api/diag` : uptime, RAM libre, stats ETH (RX/TX/erreurs), connexions actives, version FW, hash MCUboot
 - Endpoint `GET /api/reboot` (auth) → soft reset
 
-**Étape 12.3 — mDNS / Bonjour**
+**Étape 13.3 — mDNS / Bonjour**
 - `CONFIG_DNS_SD=y` + `CONFIG_MDNS_RESPONDER=y`
 - Hostname `industrial-ethernet.local` accessible sans IP
 
-**Étape 12.4 — Doc + démo scénario**
+**Étape 13.4 — Doc + démo scénario**
 - README : schéma archi, mapping registres, comment tester chaque protocole
 - Vidéo de démo : DHCP → web + LCD → Modbus → upload firmware signé → rollback test
 
@@ -470,12 +511,13 @@ Phase 3  : Modbus scanner   ────►
 Phase 4  : Webserver        ────►
 Phase 5  : LCD dashboard M7 ────►   ◄── séparé du webserver
 Phase 6  : EtherNet/IP      ────►   ◄── peut être skippé si trop ambitieux
-Phase 7  : DPWS             ────►   ◄── optionnel
-Phase 8  : Auth + HTTPS     ────►
-Phase 9  : FW Update        ────►
-Phase 10 : Signature        ────►   (dépend phase 9)
-Phase 11 : Secure Boot      ────►   (couronne finale)
-Phase 12 : Polish + démo    ────►
+Phase 7  : IPv6 + identité  ────►
+Phase 8  : DPWS             ────►   ◄── optionnel
+Phase 9  : Auth + HTTPS     ────►
+Phase 10 : FW Update        ────►
+Phase 11 : Signature        ────►   (dépend phase 10)
+Phase 12 : Secure Boot      ────►   (couronne finale)
+Phase 13 : Polish + démo    ────►
 ```
 
 ## Stack technique finale

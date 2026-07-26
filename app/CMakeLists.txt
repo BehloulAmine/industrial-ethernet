@@ -3,6 +3,7 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(industrial_ethernet)
 
 target_include_directories(app PRIVATE
+  src/core
   src/net
   src/protocols/eip
   src/protocols/modbus
@@ -12,6 +13,7 @@ target_include_directories(app PRIVATE
 
 target_sources(app PRIVATE
   src/core/main.c
+  src/core/ident.c
   src/net/net_cfg.c
   src/shell/util_cmds.c
   src/protocols/modbus/app_modbus_tcp.c

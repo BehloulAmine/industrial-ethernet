@@ -25,6 +25,7 @@
 #include "ciptcpipinterface.h"
 #include "doublylinkedlist.h"
 #include "generic_networkhandler.h"
+#include "ident.h"
 #include "net_cfg.h"
 #include "opener_api.h"
 
@@ -33,9 +34,7 @@ LOG_MODULE_REGISTER(app_eip, LOG_LEVEL_INF);
 #define APP_EIP_STACK_SIZE 12288
 #define APP_EIP_THREAD_PRIORITY 7
 #define APP_EIP_ASSEMBLY_SIZE (APP_EIP_ASSEMBLY_WORD_COUNT * sizeof(uint16_t))
-#define APP_EIP_SERIAL_NUMBER 0x07470001U
-#define APP_EIP_PRODUCT_NAME "STM32H747 Industrial Demo"
-#define APP_EIP_HOST_NAME "industrial-ethernet"
+#define APP_EIP_SERIAL_NUMBER_FALLBACK 1U
 #define APP_EIP_HEAP_SIZE 32768
 
 K_THREAD_STACK_DEFINE(eip_stack, APP_EIP_STACK_SIZE);
@@ -89,26 +88,37 @@ static int configure_cip_network(const struct net_cfg_data *active)
 	g_tcpip.interface_configuration.gateway = address.s_addr;
 	g_tcpip.config_control = active->mode == NET_CFG_DHCP ?
 		kTcpipCfgCtrlDhcp : kTcpipCfgCtrlStaticIp;
-	(void)SetCipStringByCstr(&g_tcpip.hostname, APP_EIP_HOST_NAME);
+	(void)SetCipStringByCstr(&g_tcpip.hostname, APP_IDENT_HOST_NAME);
 	return 0;
 }
 
-static void configure_cip_identity(void)
+static uint32_t app_eip_serial_number(void)
+{
+	struct net_if *iface = net_if_get_default();
+	const struct net_linkaddr *link_address =
+		iface != NULL ? net_if_get_link_addr(iface) : NULL;
+
+	if (link_address == NULL || link_address->len < 6U) {
+		return APP_EIP_SERIAL_NUMBER_FALLBACK;
+	}
+
+	return sys_get_be32(&link_address->addr[2]);
+}
+
+static void configure_cip_identity(uint32_t serial)
 {
 	struct net_if *iface = net_if_get_default();
 	const struct net_linkaddr *link_address =
 		iface != NULL ? net_if_get_link_addr(iface) : NULL;
 	uint8_t mac[6];
-	uint32_t serial = APP_EIP_SERIAL_NUMBER;
 
 	if (link_address != NULL && link_address->len >= 6U) {
-		serial = sys_get_be32(&link_address->addr[2]);
 		memcpy(mac, link_address->addr, sizeof(mac));
 		CipEthernetLinkSetMac(mac);
 	}
 
 	SetDeviceSerialNumber(serial);
-	SetDeviceProductName(APP_EIP_PRODUCT_NAME);
+	SetDeviceProductName(APP_IDENT_DEVICE_NAME);
 }
 
 static void eip_thread_fn(void *arg1, void *arg2, void *arg3)
@@ -116,6 +126,7 @@ static void eip_thread_fn(void *arg1, void *arg2, void *arg3)
 	struct net_cfg_data active;
 	EipStatus status;
 	uint16_t unique_connection_id;
+	uint32_t serial;
 
 	ARG_UNUSED(arg1);
 	ARG_UNUSED(arg2);
@@ -126,14 +137,15 @@ static void eip_thread_fn(void *arg1, void *arg2, void *arg3)
 				   CipConnectionObjectListArrayAllocator,
 				   CipConnectionObjectListArrayFree);
 
-	unique_connection_id = (uint16_t)(k_cycle_get_32() ^ APP_EIP_SERIAL_NUMBER);
+	serial = app_eip_serial_number();
+	unique_connection_id = (uint16_t)(k_cycle_get_32() ^ serial);
 	status = CipStackInit(unique_connection_id);
 	if (status != kEipStatusOk) {
 		LOG_ERR("OpENer CIP initialization failed: %d", status);
 		return;
 	}
 
-	configure_cip_identity();
+	configure_cip_identity(serial);
 	if (configure_cip_network(&active) < 0) {
 		LOG_ERR("OpENer network configuration failed");
 		ShutdownCipStack();
