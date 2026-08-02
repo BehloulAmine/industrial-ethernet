@@ -13,6 +13,7 @@
 #include <zephyr/logging/log.h>
 
 #include "app_modbus_tcp.h"
+#include "app_dpws.h"
 #include "app_eip.h"
 #include "app_lcd.h"
 #include "app_web.h"
@@ -59,7 +60,7 @@ int main(void)
 	struct net_if *iface;
 	int ret;
 
-	LOG_INF("=== H747 Demo Phase 1 ===");
+	LOG_INF("=== H747 Demo Phase 8 ===");
 
 	if (!gpio_is_ready_dt(&led)) {
 		LOG_ERR("LED device not ready");
@@ -105,6 +106,11 @@ int main(void)
 	ret = app_web_start();
 	if (ret < 0) {
 		LOG_ERR("app_web_start failed: %d", ret);
+	}
+
+	ret = app_dpws_start();
+	if (ret < 0) {
+		LOG_ERR("app_dpws_start failed: %d", ret);
 	}
 
 	ret = app_lcd_start();

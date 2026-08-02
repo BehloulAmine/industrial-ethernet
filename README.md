@@ -2,8 +2,8 @@
 
 Prototype embarqué industriel sur **STM32H747I-DISCO** démontrant :
 
-- TCP/IP, DHCP, mDNS
-- Webserver HTTPS
+- TCP/IP IPv4/IPv6, DHCP, mDNS
+- Webserver HTTP dual-stack (HTTPS planifié)
 - Modbus TCP (server + scanner)
 - EtherNet/IP (OpENer)
 - WS-Discovery (DPWS)
@@ -21,8 +21,11 @@ Ce README sert de guide de setup, build, flash et vérification du projet couran
 La branche actuelle correspond au bring-up M7 avec :
 
 - heartbeat LED et logs UART ;
-- Ethernet IPv4 avec DHCP ou IP statique persistée ;
-- shell UART avec commandes `ip show`, `ip dhcp`, `ip static`, `uptime` et `reboot` ;
+- Ethernet IPv4 avec DHCP ou IP statique persistée, et IPv6 link-local automatique ;
+- shell UART avec commandes `ip show`, `ip dhcp`, `ip static`, `ident`, `uptime` et `reboot` ;
+- serveur web HTTP dual-stack sur IPv4 et IPv6, port 80 ;
+- responder DPWS/WS-Discovery sur UDP 3702, multicast IPv6 `ff02::c` et IPv4 `239.255.255.250` ;
+- métadonnées DPWS via WS-Transfer HTTP : nom, fabricant, modèle, version FW, hardware ID, MAC, IPv4, IPv6 et UUID ;
 - serveur Modbus TCP sur le port 502, unit-ID 1 ;
 - device EtherNet/IP OpENer sur TCP/UDP 44818 et I/O UDP 2222 ;
 - assemblies Class 1 : Config 1 (0 octet), Output 100 et Input 101, chacune reliée aux 10 mots de la fenêtre scanner ;
@@ -40,6 +43,19 @@ Le probe vérifie `ListIdentity`, `RegisterSession` et lit le nom produit avec
 `Get_Attribute_Single` sur l'Identity Object. Wireshark peut décoder les échanges
 avec le filtre `enip || cip`.
 
+Test DPWS/WS-Discovery IPv6 depuis Windows, après avoir relevé l'index de
+l'interface Ethernet avec `netsh interface ipv6 show interfaces` :
+
+```powershell
+python tools/dpws_probe.py --interface-index 11
+```
+
+Le script envoie un `Probe` à `[ff02::c]:3702`, reçoit le `ProbeMatch`, suit le
+`XAddr`, effectue un `WS-Transfer Get` et affiche les métadonnées du device. Il
+n'utilise que la bibliothèque standard Python. Wireshark peut filtrer les
+échanges de découverte avec `udp.port == 3702`, puis le SOAP HTTP avec
+`http || xml`.
+
 Pour un échange cyclique avec un PLC ou un scanner EtherNet/IP, configurer une
 connexion Exclusive Owner avec 20 octets O-to-T sur l'Assembly 100 et 20 octets
 T-to-O sur l'Assembly 101. Utiliser l'Assembly 1 comme configuration vide,
@@ -47,6 +63,7 @@ activer le Run/Idle header seulement en O-to-T et commencer en Point-to-Point
 dans les deux directions. Les mots sont encodés en little-endian.
 
 ## Prérequis
+
 - **Python 3.12** disponible dans le PATH
 - **7-Zip** installé dans `C:\Program Files\7-Zip\` (requis par `west sdk install`)
 
@@ -220,6 +237,12 @@ usbipd detach --busid 3-2
 ```
 
 ## Setup Windows
+
+Sous Powershell install
+
+```bash
+winget install Kitware.CMake Ninja-build.Ninja oss-winget.gperf Python.Python.3.12 Git.Git oss-winget.dtc wget 7zip.7zip
+```
 
 ### 1. Cloner et initialiser le workspace
 

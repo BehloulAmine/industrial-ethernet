@@ -19,6 +19,7 @@
 
 #include "app_modbus_scanner.h"
 #include "app_modbus_tcp.h"
+#include "app_dpws.h"
 #include "app_web.h"
 #include "app_web_assets.h"
 #include "app_web_logo.h"
@@ -39,6 +40,7 @@ static struct k_thread app_web_thread;
 static k_tid_t app_web_tid;
 static struct k_work_delayable reboot_work;
 static bool web_started;
+static char dpws_metadata_xml[APP_DPWS_METADATA_XML_SIZE];
 
 static void reboot_work_handler(struct k_work *work)
 {
@@ -482,6 +484,17 @@ static int handle_http_request(int client, char *req)
 	}
 
 	if (strcmp(method, "POST") == 0) {
+		if (app_dpws_is_metadata_path(path)) {
+			int len = app_dpws_build_metadata(dpws_metadata_xml,
+						  sizeof(dpws_metadata_xml), req);
+
+			if (len < 0) {
+				return send_bad_request(client);
+			}
+			return send_response_data(client, 200, "OK",
+						  "application/soap+xml; charset=utf-8",
+						  dpws_metadata_xml, (size_t)len);
+		}
 		return handle_api_post(client, path);
 	}
 

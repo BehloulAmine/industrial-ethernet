@@ -369,17 +369,55 @@ CONFIG_NET_IPV6_MLD=y
 
 ---
 
-### Phase 8 — DPWS / WS-Discovery (optionnel mais cool)
+### Phase 8 — DPWS / WS-Discovery et métadonnées HTTP
 
-**Étape 8.1 — WS-Discovery minimaliste**
-- Pas de stack DPWS complète dans Zephyr → implémenter manuellement :
-  - Listener UDP multicast 239.255.255.250:3702
-  - Répondre aux `<Probe>` SOAP avec un `<ProbeMatch>` contenant l'URL HTTP
-- ~200 lignes de C avec template XML statique
+Objectif : reproduire le cycle de découverte observé sur le drive Schneider :
+un `Probe` WS-Discovery multicast, un `ProbeMatch` contenant le `XAddr`, puis
+une requête HTTP WS-Transfer pour obtenir les informations détaillées du device.
 
-**Test :** outil **WSDiscoveryTool** (.NET) sur le PC → la carte apparaît dans la liste des devices découverts → clic ouvre la page web.
+**Étape 8.1 — WS-Discovery IPv6 et IPv4**
+- Listener UDP 3702 sur les deux familles d'adresses.
+- Rejoindre les groupes multicast standards :
+  - IPv6 `ff02::c` sur l'interface Ethernet ;
+  - IPv4 `239.255.255.250`.
+- Attendre que l'adresse IPv6 link-local soit validée par DAD avant de rejoindre le groupe IPv6.
+- Accepter les profils WS-Discovery 2005/04 et 2009/01.
+- Répondre aux probes `wsdp:Device` avec un `ProbeMatch` unicast contenant :
+  - l'EndpointReference `urn:uuid:<device-uuid>` ;
+  - les types `wsdp:Device` et `IndustrialEthernetDevice` ;
+  - les scopes du device ;
+  - les XAddrs HTTP IPv6 et IPv4 ;
+  - la version des métadonnées.
 
-**Livrable :** discovery auto sur le réseau (comme un drive ATV).
+**Étape 8.2 — Métadonnées DPWS via WS-Transfer**
+- Ajouter un endpoint HTTP `POST /dpws/<device-uuid>` sur le serveur dual-stack existant.
+- Accepter l'action SOAP `http://schemas.xmlsoap.org/ws/2004/09/transfer/Get`.
+- Retourner les sections DPWS `ThisModel`, `ThisDevice` et une section applicative.
+- Publier les informations centralisées par `ident` : nom, fabricant, modèle,
+  version FW, hardware ID, MAC, IPv4, IPv6 link-local et UUID.
+- Ajouter les informations applicatives temporaires : ProductCode, gamme,
+  capacités, emplacement, hostname, uptime et services supportés.
+
+**Étape 8.3 — Client Python de validation**
+- Ajouter `tools/dpws_probe.py`, sans dépendance Scapy.
+- Envoyer le probe multicast IPv6 sur l'index Ethernet fourni.
+- Vérifier la corrélation `MessageID` / `RelatesTo`.
+- Extraire l'EndpointReference et les XAddrs du `ProbeMatch`.
+- Effectuer automatiquement le `WS-Transfer Get`, en ajoutant le scope IPv6
+  Windows pour les adresses link-local.
+- Afficher les informations d'identification et les services du device.
+
+**Test Windows :**
+```powershell
+netsh interface ipv6 show interfaces
+python tools/dpws_probe.py --interface-index 11
+```
+
+**Test Wireshark :** `udp.port == 3702` pour la découverte, puis `http || xml`
+pour les métadonnées SOAP.
+
+**Livrable :** découverte automatique IPv6/IPv4 et récupération des métadonnées
+DPWS de la carte, selon le même cycle que le drive Schneider.
 
 ---
 
