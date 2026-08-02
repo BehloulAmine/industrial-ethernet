@@ -11,6 +11,11 @@ Prototype embarqué industriel sur **STM32H747I-DISCO** démontrant :
 
 ## Documentation
 
+Pour comprendre le firmware avant d'intervenir, commencer par
+[`app/src/ARCHITECTURE.md`](app/src/ARCHITECTURE.md). Cette documentation décrit
+la vue globale, les threads, stacks, priorités et contrats partagés, puis renvoie
+vers un document détaillé pour chaque fonctionnalité de `app/src`.
+
 Ce README sert de guide de setup, build, flash et vérification du projet courant.
 
 - [Eth_industriel_plan.md](Eth_industriel_plan.md) : plan fonctionnel complet de la démo Ethernet industriel, avec les phases Modbus, webserver, EtherNet/IP, DPWS, sécurité, firmware update et secure boot.
