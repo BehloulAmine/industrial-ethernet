@@ -2,7 +2,7 @@
 
 Ce répertoire contient les fonctionnalités applicatives du firmware Zephyr pour
 la STM32H747I-DISCO M7. Cette page est le point d'entrée conseillé avant toute
-modification. Chaque module possède ensuite son propre `ARCHITECTURE.md`.
+modification. Chaque module possède ensuite son propre document `DES04_*.md`.
 
 ## Vue globale
 
@@ -89,14 +89,14 @@ Zephyr indiquées correspondent au build courant ; vérifier
 
 ## Documentation par fonctionnalité
 
-- [Orchestration et identité](core/ARCHITECTURE.md)
-- [Configuration réseau](net/ARCHITECTURE.md)
-- [Modbus TCP et scanner](protocols/modbus/ARCHITECTURE.md)
-- [EtherNet/IP et OpENer](protocols/eip/ARCHITECTURE.md)
-- [DPWS et WS-Discovery](protocols/dpws/ARCHITECTURE.md)
-- [Serveur HTTP et interface Web](web/ARCHITECTURE.md)
-- [Écran LCD et LVGL](ui/ARCHITECTURE.md)
-- [Shell UART](shell/ARCHITECTURE.md)
+- [Orchestration et identité](core/DES04_Core.md)
+- [Configuration réseau](net/DES04_Network.md)
+- [Modbus TCP et scanner](protocols/modbus/DES04_Modbus.md)
+- [EtherNet/IP et OpENer](protocols/eip/DES04_EtherNetIP.md)
+- [DPWS et WS-Discovery](protocols/dpws/DES04_DPWS.md)
+- [Serveur HTTP et interface Web](web/DES04_Web.md)
+- [Écran LCD et LVGL](ui/DES04_LCD.md)
+- [Shell UART](shell/DES04_Shell.md)
 
 ## Validation minimale après une modification
 

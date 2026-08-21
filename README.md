@@ -14,7 +14,7 @@ Prototype embarqué industriel sur **STM32H747I-DISCO** démontrant :
 Pour comprendre le firmware avant d'intervenir, commencer par
 [`app/src/ARCHITECTURE.md`](app/src/ARCHITECTURE.md). Cette documentation décrit
 la vue globale, les threads, stacks, priorités et contrats partagés, puis renvoie
-vers un document détaillé pour chaque fonctionnalité de `app/src`.
+vers un document `DES04_<Fonction>.md` pour chaque fonctionnalité de `app/src`.
 
 Ce README sert de guide de setup, build, flash et vérification du projet courant.
 
