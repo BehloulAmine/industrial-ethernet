@@ -383,7 +383,7 @@ industrial-ethernet/
 │   ├── prj.conf
 │   ├── boards/           ← DTS overlays
 │   └── src/              ← Main, réseau, Modbus TCP et commandes shell
-├── app_m4/               ← (futur) Application Cortex-M4 (LCD)
+├── app_m4/               ← (phase 9) Application Cortex-M4 de contrôle moteur
 └── patches/              ← Patches Zephyr pour Windows
 ```
 
