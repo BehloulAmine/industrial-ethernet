@@ -287,13 +287,13 @@ Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-
 **Étape 5.1 — Activer le LCD et LVGL**
 - Ajouter le module `lvgl` au manifeste West puis exécuter `west update`.
 - Construire l'image M7 avec le shield correspondant à la révision de la dalle :
-  - `west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf`
+  - `west build -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7 -- -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf`
   - variante dalle A09 : `-DSHIELD=st_b_lcd40_dsi1_mb1166_a09`.
 
 **Étape 5.2 — Module UI séparé**
-- Sources dans `app/src/ui/app_lcd.c` et `app_lcd.h`.
+- Sources dans `app_m7/src/ui/app_lcd.c` et `app_lcd.h`.
 - Une tâche LCD dédiée est l'unique propriétaire des objets LVGL.
-- La configuration LVGL est isolée dans `app/lcd.conf` : le build Ethernet historique sans shield reste disponible et le dashboard est alors désactivé avec un log explicite.
+- La configuration LVGL est isolée dans `app_m7/lcd.conf` : le build Ethernet historique sans shield reste disponible et le dashboard est alors désactivé avec un log explicite.
 
 **Étape 5.3 — Dashboard local**
 - LVGL affiche sur le LCD 4" :
@@ -314,8 +314,8 @@ Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-
 
 **Étape 6.1 — Stack EIP**
 - Zephyr n'a pas de stack EIP officielle.
-- Choix retenu : **OpENer**, intégré comme sous-module Git dans `app/third_party/opener/`.
-- Le port Zephyr est isolé dans `app/src/protocols/eip/` : sockets `zsock`, horloges, mémoire et callbacks applicatifs.
+- Choix retenu : **OpENer**, intégré comme sous-module Git dans `app_m7/third_party/opener/`.
+- Le port Zephyr est isolé dans `app_m7/src/protocols/eip/` : sockets `zsock`, horloges, mémoire et callbacks applicatifs.
 - TCP/UDP 44818 : encapsulation EtherNet/IP, découverte, sessions et messaging explicite CIP.
 - UDP 2222 : I/O implicites cycliques Class 1 via une connexion Exclusive Owner.
 - Après un clone : `git submodule update --init --recursive`.
@@ -352,7 +352,7 @@ CONFIG_NET_IPV6_MLD=y
 - Test Windows : relever l'index Ethernet avec `netsh interface ipv6 show interfaces`, puis exécuter `ping -6 <ipv6-link-local>%<index>`.
 
 **Étape 7.2 — Centraliser l'identification de la carte**
-- Ajouter `app/src/core/ident.c` et `ident.h`.
+- Ajouter `app_m7/src/core/ident.c` et `ident.h`.
 - Centraliser le nom du device, le hostname, le fabricant, le modèle et la version firmware `MAJOR.MINOR.PATCH`.
 - Lire l'identifiant matériel STM32 via `hwinfo_get_device_id()`.
 - Exposer la MAC, l'IPv4 active, l'IPv6 link-local et un UUID stable dérivé de la MAC.
@@ -708,7 +708,7 @@ Phase 15 : Polish + démo    ────►
 | Build | West + CMake + imgtool |
 
 Prochaine étape : réaliser la phase 9 sans coupler prématurément le moteur au réseau :
-- conserver `app/` pour l'image M7 existante : réseau, protocoles, Web et LCD ;
+- conserver `app_m7/` pour l'image M7 existante : réseau, protocoles, Web et LCD ;
 - créer `app_m4/` pour la machine d'états moteur, PWM/GPIO, boutons, ADC et LD3/LD4 ;
 - documenter le câblage L293D/MB V2 et choisir les broches sans conflit entre les deux cœurs ;
 - valider l'application M4 seule avec une consigne PWM fixe, puis ajouter le potentiomètre ;

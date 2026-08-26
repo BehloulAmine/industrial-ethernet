@@ -1,0 +1,43 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+
+/*
+ * STMod+ P2 allocation for the local motor demo.
+ *
+ * P2.14 PF8  : L293D EN1,2 (TIM13_CH1 PWM)
+ * P2.1  PA11 : L293D IN1 (default SPI routing through SB32)
+ * P2.2  PC3  : L293D IN2 (default SPI routing through SB34)
+ * P2.8  PB15 : START button, active low
+ * P2.9  PB14 : STOP button, active low
+ * P2.3  PC2  : DIRECTION button, active low (default SPI routing through SB36)
+ * P2.12 PJ13 : RESET button, active low
+ *
+ * P2.7/PD12 and P2.10/PD13 are deliberately left to the M7 LCD I2C bus.
+ * P2.11/PC6, P2.17/PC7, P2.19/PB9 and P2.20/PB8 are left to M7 SDMMC1.
+ * P2.13/PA4 is reserved for the potentiometer increment of phase 9.
+ */
+
+/ {
+	zephyr,user {
+		motor-in1-gpios = <&gpioa 11 GPIO_ACTIVE_HIGH>;
+		motor-in2-gpios = <&gpioc 3 GPIO_ACTIVE_HIGH>;
+
+		start-gpios = <&gpiob 15 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		stop-gpios = <&gpiob 14 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		direction-gpios = <&gpioc 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		reset-gpios = <&gpioj 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+
+		/* TIM13_CH1, 5 kHz. */
+		pwms = <&pwm13 1 PWM_USEC(200) PWM_POLARITY_NORMAL>;
+	};
+};
+
+&timers13 {
+	status = "okay";
+
+	pwm13: pwm {
+		status = "okay";
+		pinctrl-0 = <&tim13_ch1_pf8>;
+		pinctrl-names = "default";
+	};
+};

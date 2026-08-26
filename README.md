@@ -12,9 +12,9 @@ Prototype embarqué industriel sur **STM32H747I-DISCO** démontrant :
 ## Documentation
 
 Pour comprendre le firmware avant d'intervenir, commencer par
-[`app/src/ARCHITECTURE.md`](app/src/ARCHITECTURE.md). Cette documentation décrit
+[`app_m7/src/ARCHITECTURE.md`](app_m7/src/ARCHITECTURE.md). Cette documentation décrit
 la vue globale, les threads, stacks, priorités et contrats partagés, puis renvoie
-vers un document `DES04_<Fonction>.md` pour chaque fonctionnalité de `app/src`.
+vers un document `DES04_<Fonction>.md` pour chaque fonctionnalité de `app_m7/src`.
 
 Ce README sert de guide de setup, build, flash et vérification du projet courant.
 
@@ -117,28 +117,35 @@ Sous WSL Ubuntu, le patch Windows `patches/zephyr-cmake-backslash.patch` n'est p
 ### 4. Build
 
 ```bash
-west build -p always -b stm32h747i_disco/stm32h747xx/m7 app
+west build -d build_m7_no_lcd -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7
 ```
 
 Pour construire avec le dashboard LCD local (phase 5) :
 
 ```bash
-west update
-west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- \
-  -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf
+west build -d build_m7 -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7 -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf
 ```
 
 Pour une image de diagnostic réseau temporaire (commandes UART `net conn`,
 `net mem` et `net stats`) :
 
 ```bash
-west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- \
+west build -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7 -- \
   -DSHIELD=st_b_lcd40_dsi1_mb1166 \
   '-DEXTRA_CONF_FILE=lcd.conf;diagnostics.conf'
 ```
 
 `diagnostics.conf` est destiné au développement : il ajoute des outils utiles
 pour analyser les sockets et buffers réseau, mais augmente la taille de l'image.
+
+Pour construire l'application locale de contrôle moteur Cortex-M4 :
+
+```bash
+west build -d build_m4 -p always -b stm32h747i_disco/stm32h747xx/m4 app_m4
+```
+
+Les deux images utilisent des emplacements Flash distincts. Construire et flasher
+le M7 depuis `build_m7`, puis le M4 depuis `build_m4`.
 
 Si la dalle porte la révision A09, utiliser le shield
 `st_b_lcd40_dsi1_mb1166_a09`. Le LCD est piloté par le M7, car c'est la cible
@@ -208,7 +215,7 @@ Pour cette carte, le port serie est souvent :
 6. Flasher depuis WSL :
 
 ```bash
-west flash --runner openocd
+west flash -d build_m7/ --runner openocd
 ```
 
 Si besoin, utiliser `sudo` pour les acces USB :
@@ -300,13 +307,13 @@ cd ../industrial-ethernet
 ### 4. Build & Flash
 
 ```bash
-west build -p always -b stm32h747i_disco/stm32h747xx/m7 app
+west build -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7
 west flash --runner openocd
 ```
 
 Quand utiliser `west build` vs `cmake --build build` :
 
-- utiliser `west build -p always -b stm32h747i_disco/stm32h747xx/m7 app` quand tu changes la board, `prj.conf`, un overlay DTS, le toolchain, ou quand tu veux repartir d'un build propre
+- utiliser `west build -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7` quand tu changes la board, `prj.conf`, un overlay DTS, le toolchain, ou quand tu veux repartir d'un build propre
 - utiliser `cmake --build build` quand le dossier `build/` existe deja et que tu veux simplement recompiler vite apres une modif de code ou relancer la generation sans refaire un build pristine
 - en cas de doute, rester sur `west build -p always ...` : c'est la commande Zephyr la plus robuste
 
@@ -378,7 +385,7 @@ industrial-ethernet/
 ├── README.md             ← Setup, build, flash et vérification
 ├── Eth_industriel_plan.md ← Plan global de la démo industrielle
 ├── Devicetree_memory.md  ← Notes mémoire, devicetree et settings/QSPI
-├── app/                  ← Application Cortex-M7 (réseau)
+├── app_m7/               ← Application Cortex-M7 (réseau, protocoles, Web et LCD)
 │   ├── CMakeLists.txt
 │   ├── prj.conf
 │   ├── boards/           ← DTS overlays

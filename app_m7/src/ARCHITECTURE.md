@@ -101,7 +101,7 @@ Zephyr indiquées correspondent au build courant ; vérifier
 ## Validation minimale après une modification
 
 ```bash
-west build -p always -b stm32h747i_disco/stm32h747xx/m7 app
+west build -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7
 python tools/eip_probe.py <ip-carte>
 python tools/dpws_probe.py
 ```
@@ -109,7 +109,7 @@ python tools/dpws_probe.py
 Pour l'image LCD :
 
 ```bash
-west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- \
+west build -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7 -- \
   -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf
 ```
 

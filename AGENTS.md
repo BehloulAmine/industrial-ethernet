@@ -5,19 +5,20 @@
 This repository is a Zephyr 4.4 firmware project for the STM32H747I-DISCO
 Cortex-M7. Phases 1 through 6 are implemented; Phase 7 (WS-Discovery) is next.
 
-- `app/` is the Zephyr application, configuration, and board overlay.
-- `app/src/core/` contains startup and the heartbeat loop.
-- `app/src/net/` owns DHCP/static IPv4 configuration and persistent network settings.
-- `app/src/protocols/modbus/` contains Modbus TCP, the Unit-ID 2 scanner window,
+- `app_m7/` is the Cortex-M7 Zephyr application, configuration, and board overlay.
+- `app_m4/` is the Cortex-M4 motor-control application.
+- `app_m7/src/core/` contains startup and the heartbeat loop.
+- `app_m7/src/net/` owns DHCP/static IPv4 configuration and persistent network settings.
+- `app_m7/src/protocols/modbus/` contains Modbus TCP, the Unit-ID 2 scanner window,
   and the 50-register contract in `modbus_map.h`.
-- `app/src/protocols/eip/` contains the Zephyr port and application glue for
-  OpENer; upstream sources are the `app/third_party/opener/` Git submodule.
-- `app/src/web/` contains the socket-based HTTP server, REST endpoints, embedded web assets, and logo.
-- `app/src/ui/` contains the optional M7 LVGL touchscreen dashboard.
-- `app/src/shell/` contains UART shell commands.
+- `app_m7/src/protocols/eip/` contains the Zephyr port and application glue for
+  OpENer; upstream sources are the `app_m7/third_party/opener/` Git submodule.
+- `app_m7/src/web/` contains the socket-based HTTP server, REST endpoints, embedded web assets, and logo.
+- `app_m7/src/ui/` contains the optional M7 LVGL touchscreen dashboard.
+- `app_m7/src/shell/` contains UART shell commands.
 - `tools/eip_probe.py` validates explicit EtherNet/IP messaging.
 
-Keep protocol code inside its module. Update `app/CMakeLists.txt` for new sources
+Keep protocol code inside its module. Update `app_m7/CMakeLists.txt` for new M7 sources
 and `modbus_map.h` whenever the public register contract changes.
 
 ## Current Architecture and Resume Context
@@ -45,14 +46,14 @@ After cloning, initialize OpENer and the Zephyr workspace:
 git submodule update --init --recursive
 west init -l .
 west update
-west build -p always -b stm32h747i_disco/stm32h747xx/m7 app
+west build -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7
 west flash --runner openocd
 ```
 
 Build the LCD image with:
 
 ```bash
-west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- \
+west build -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7 -- \
   -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf
 ```
 

@@ -1,7 +1,7 @@
 # EtherNet/IP avec OpENer
 
 Ce module transforme l'application Zephyr en adaptateur EtherNet/IP. La pile
-CIP provient du submodule `app/third_party/opener`; le dossier local contient
+CIP provient du submodule `app_m7/third_party/opener`; le dossier local contient
 l'intégration applicative et l'adaptation des sockets BSD vers Zephyr.
 
 ## Architecture

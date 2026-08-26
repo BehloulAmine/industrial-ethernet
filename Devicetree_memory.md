@@ -33,7 +33,7 @@ Exemples dans Zephyr:
 
 Exemple dans ce projet:
 
-- `app/boards/stm32h747i_disco_stm32h747xx_m7.overlay`
+- `app_m7/boards/stm32h747i_disco_stm32h747xx_m7.overlay`
 
 ### Ordre logique
 
@@ -127,9 +127,9 @@ Cette partition interne n'est pas adaptee a notre usage:
 
 Le projet deplace donc explicitement `storage_partition` dans la QSPI externe via:
 
-- `app/boards/stm32h747i_disco_stm32h747xx_m7.overlay`
+- `app_m7/boards/stm32h747i_disco_stm32h747xx_m7.overlay`
 - `zephyr,settings-partition = &storage_partition` dans le noeud `/chosen`
-- `CONFIG_FLASH_STM32_QSPI=y` dans `app/prj.conf`
+- `CONFIG_FLASH_STM32_QSPI=y` dans `app_m7/prj.conf`
 
 Layout actuel:
 

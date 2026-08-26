@@ -49,7 +49,7 @@ devicetree définit `zephyr,display`. Deux contrôleurs de dalle sont supportés
 Commande de build :
 
 ```bash
-west build -p always -b stm32h747i_disco/stm32h747xx/m7 app -- \
+west build -p always -b stm32h747i_disco/stm32h747xx/m7 app_m7 -- \
   -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf
 ```
 

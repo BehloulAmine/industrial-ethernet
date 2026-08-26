@@ -1,5 +1,7 @@
 build/
-build-no-lcd/
+build_m4/
+build_m7/
+build_m7_no_lcd/
 .venv/
 __pycache__/
 *.pyc
