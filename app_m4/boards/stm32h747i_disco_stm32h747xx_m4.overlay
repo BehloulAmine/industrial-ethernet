@@ -14,7 +14,7 @@
  *
  * P2.7/PD12 and P2.10/PD13 are deliberately left to the M7 LCD I2C bus.
  * P2.11/PC6, P2.17/PC7, P2.19/PB9 and P2.20/PB8 are left to M7 SDMMC1.
- * P2.13/PA4 is reserved for the potentiometer increment of phase 9.
+ * P2.13 PA4  : potentiometer cursor (ADC1_INP18)
  */
 
 / {
@@ -29,6 +29,33 @@
 
 		/* TIM13_CH1, 5 kHz. */
 		pwms = <&pwm13 1 PWM_USEC(200) PWM_POLARITY_NORMAL>;
+		io-channels = <&adc1 18>;
+	};
+};
+
+&perck {
+	clocks = <&rcc STM32_SRC_HSE CKPER_SEL(2)>;
+	status = "okay";
+};
+
+&adc1 {
+	clocks = <&rcc STM32_CLOCK(AHB1, 5)>,
+		 <&rcc STM32_SRC_CKPER ADC_SEL(2)>;
+	clock-names = "adcx", "adc_ker";
+	st,adc-clock-source = "ASYNC";
+	st,adc-prescaler = <256>;
+	pinctrl-0 = <&adc1_inp18_pa4>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	channel@12 {
+		reg = <18>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_MAX>;
+		zephyr,resolution = <12>;
 	};
 };
 

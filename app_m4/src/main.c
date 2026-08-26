@@ -7,9 +7,11 @@
 
 #include "motor_buttons.h"
 #include "motor_control.h"
+#include "motor_potentiometer.h"
 
 #define MOTOR_LOOP_PERIOD_MS 10
 #define READY_BLINK_PERIOD_MS 500
+#define STOPPING_BLINK_PERIOD_MS 100
 
 static const struct gpio_dt_spec blue_led =
 	GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
@@ -40,11 +42,16 @@ static void status_leds_update(void)
 	bool red_on = false;
 
 	switch (state) {
+	case APP_MOTOR_STATE_DISABLED:
+		break;
 	case APP_MOTOR_STATE_READY:
 		blue_on = ((k_uptime_get() / READY_BLINK_PERIOD_MS) % 2) != 0;
 		break;
 	case APP_MOTOR_STATE_RUNNING:
 		blue_on = true;
+		break;
+	case APP_MOTOR_STATE_STOPPING:
+		blue_on = ((k_uptime_get() / STOPPING_BLINK_PERIOD_MS) % 2) != 0;
 		break;
 	case APP_MOTOR_STATE_FAULT:
 		red_on = true;
@@ -62,8 +69,9 @@ int main(void)
 	bool leds_ready = status_leds_init();
 	int motor_ret = app_motor_init();
 	int buttons_ret = app_motor_buttons_init();
+	int potentiometer_ret = app_motor_potentiometer_init();
 
-	if ((motor_ret < 0) || (buttons_ret < 0)) {
+	if ((motor_ret < 0) || (buttons_ret < 0) || (potentiometer_ret < 0)) {
 		if (leds_ready) {
 			(void)gpio_pin_set_dt(&blue_led, 0);
 			(void)gpio_pin_set_dt(&red_led, 1);
@@ -75,7 +83,15 @@ int main(void)
 	}
 
 	while (true) {
+		uint16_t requested_duty;
 		uint32_t events = app_motor_buttons_poll();
+		int ret = app_motor_potentiometer_poll(&requested_duty);
+
+		if (ret < 0) {
+			app_motor_fail(ret);
+		} else {
+			(void)app_motor_set_target_duty(requested_duty);
+		}
 
 		/* STOP has absolute priority if several buttons are pressed together. */
 		if ((events & APP_BUTTON_EVENT_STOP) != 0U) {
@@ -91,6 +107,8 @@ int main(void)
 				(void)app_motor_start();
 			}
 		}
+
+		(void)app_motor_process(MOTOR_LOOP_PERIOD_MS);
 
 		if (leds_ready) {
 			status_leds_update();

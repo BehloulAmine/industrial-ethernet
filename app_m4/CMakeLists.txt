@@ -9,4 +9,5 @@ target_sources(app PRIVATE
   src/main.c
   src/motor_buttons.c
   src/motor_control.c
+  src/motor_potentiometer.c
 )

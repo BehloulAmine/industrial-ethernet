@@ -465,7 +465,8 @@ Le fonctionnement du moteur ne doit dépendre ni du réseau, ni du M7, ni de l'I
 **Étape 9.5 — Consigne par potentiomètre**
 - Ajouter dans un second incrément la lecture ADC du potentiomètre, limitée à `0..3,3 V`.
 - Filtrer la mesure et ajouter une zone morte pour éviter les variations de PWM dues au bruit.
-- Mapper la valeur ADC sur une consigne de rapport cyclique `0..1000` (0,0 à 100,0 %).
+- Mapper la valeur ADC sur la plage utile validée avec le montage, actuellement
+  `800..1000` (80,0 à 100,0 %), en gardant ces bornes configurables.
 - Ajouter une rampe d'accélération/décélération et, si nécessaire, un seuil minimal de démarrage.
 - Tant qu'aucun encodeur n'est ajouté, parler de **consigne PWM**, pas de vitesse en tr/min.
 
