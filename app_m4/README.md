@@ -43,6 +43,14 @@ Last error     : 0
 
 uart:~$ m4 ping
 M4 pong in 0..20 ms
+
+uart:~$ m4 state
+State sequence : 123
+Cache age      : 0..20 ms
+Flags          : 0x00a2
+Applied PWM    : 0 permille
+Target PWM     : 800..1000 permille
+...
 ```
 
 Le délai dépend de la boucle M4 de 10 ms et de l'ordonnancement des deux cœurs ;
@@ -50,6 +58,11 @@ une valeur comprise entre 0 et 20 ms est normale. Si l'endpoint reste `unbound`,
 vérifier que les deux images ont été flashées puis effectuer un reset matériel de la carte.
 Le moteur demeure exclusivement contrôlé par ses boutons et son potentiomètre à
 cette étape.
+
+`m4 state` lit exclusivement le cache du M7 : la commande ne déclenche pas une
+requête IPC. Le compteur `M4 heartbeat` doit évoluer entre deux appels. À l'arrêt,
+les flags attendus incluent `READY` (`0x0002`), `LOCAL` (`0x0020`) et `IPC_VALID`
+(`0x0080`), soit `0x00a2`.
 
 ## Comportement
 

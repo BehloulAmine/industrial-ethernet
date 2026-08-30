@@ -21,15 +21,18 @@ static const struct gpio_dt_spec red_led =
 
 static bool status_leds_init(void)
 {
-	if (!gpio_is_ready_dt(&blue_led) || !gpio_is_ready_dt(&red_led)) {
+	if (!gpio_is_ready_dt(&blue_led) || !gpio_is_ready_dt(&red_led))
+	{
 		return false;
 	}
 
-	if (gpio_pin_configure_dt(&blue_led, GPIO_OUTPUT_INACTIVE) < 0) {
+	if (gpio_pin_configure_dt(&blue_led, GPIO_OUTPUT_INACTIVE) < 0)
+	{
 		return false;
 	}
 
-	if (gpio_pin_configure_dt(&red_led, GPIO_OUTPUT_INACTIVE) < 0) {
+	if (gpio_pin_configure_dt(&red_led, GPIO_OUTPUT_INACTIVE) < 0)
+	{
 		return false;
 	}
 
@@ -42,7 +45,8 @@ static void status_leds_update(void)
 	bool blue_on = false;
 	bool red_on = false;
 
-	switch (state) {
+	switch (state)
+	{
 	case APP_MOTOR_STATE_DISABLED:
 		break;
 	case APP_MOTOR_STATE_READY:
@@ -75,47 +79,65 @@ int main(void)
 
 	(void)ipc_ret;
 
-	if ((motor_ret < 0) || (buttons_ret < 0) || (potentiometer_ret < 0)) {
-		if (leds_ready) {
+	if ((motor_ret < 0) || (buttons_ret < 0) || (potentiometer_ret < 0))
+	{
+		if (leds_ready)
+		{
 			(void)gpio_pin_set_dt(&blue_led, 0);
 			(void)gpio_pin_set_dt(&red_led, 1);
 		}
 
-		while (true) {
+		while (true)
+		{
 			k_sleep(K_FOREVER);
 		}
 	}
 
-	while (true) {
+	while (true)
+	{
 		uint16_t requested_duty;
 		uint32_t events = app_motor_buttons_poll();
 		int ret = app_motor_potentiometer_poll(&requested_duty);
 
-		if (ret < 0) {
+		if (ret < 0)
+		{
 			app_motor_fail(ret);
-		} else {
+		}
+		else
+		{
 			(void)app_motor_set_target_duty(requested_duty);
 		}
 
 		/* STOP has absolute priority if several buttons are pressed together. */
-		if ((events & APP_BUTTON_EVENT_STOP) != 0U) {
+		if ((events & APP_BUTTON_EVENT_STOP) != 0U)
+		{
 			(void)app_motor_stop();
-		} else if ((events & APP_BUTTON_EVENT_RESET) != 0U) {
+		}
+		else if ((events & APP_BUTTON_EVENT_RESET) != 0U)
+		{
 			(void)app_motor_reset();
-		} else {
-			if ((events & APP_BUTTON_EVENT_DIRECTION) != 0U) {
+		}
+		else
+		{
+			if ((events & APP_BUTTON_EVENT_DIRECTION) != 0U)
+			{
 				(void)app_motor_toggle_direction();
 			}
 
-			if ((events & APP_BUTTON_EVENT_START) != 0U) {
+			if ((events & APP_BUTTON_EVENT_START) != 0U)
+			{
 				(void)app_motor_start();
 			}
 		}
 
 		(void)app_motor_process(MOTOR_LOOP_PERIOD_MS);
 		app_ipc_process();
+		app_ipc_publish_motor_state(app_motor_buttons_get_state(),
+							app_motor_potentiometer_get_raw(),
+							MOTOR_LOOP_PERIOD_MS);
 
-		if (leds_ready) {
+		if (leds_ready)
+		{
 			status_leds_update();
 		}
 

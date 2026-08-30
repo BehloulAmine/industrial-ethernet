@@ -10,11 +10,14 @@
 #include <zephyr/shell/shell.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/byteorder.h>
+#include <zephyr/spinlock.h>
 #include <zephyr/sys/util.h>
 
 #include "app_ipc_protocol.h"
+#include "app_motor_contract.h"
 
 #define APP_IPC_PING_TIMEOUT_MS 250
+#define APP_IPC_SEND_RETRY_MS 20
 
 BUILD_ASSERT(sizeof(struct app_ipc_frame) == 16U,
 	     "Unexpected IPC frame size");
@@ -28,6 +31,8 @@ static atomic_t endpoint_initialized;
 static atomic_t next_sequence;
 static atomic_t received_sequence;
 static atomic_t last_error;
+static struct k_spinlock motor_state_lock;
+static struct app_ipc_motor_state motor_state_cache;
 
 static void frame_init(struct app_ipc_frame *frame, enum app_ipc_frame_type type,
 		       uint32_t sequence, uint32_t value)
@@ -36,13 +41,13 @@ static void frame_init(struct app_ipc_frame *frame, enum app_ipc_frame_type type
 	frame->version_le = sys_cpu_to_le16(APP_IPC_FRAME_VERSION);
 	frame->type_le = sys_cpu_to_le16((uint16_t)type);
 	frame->sequence_le = sys_cpu_to_le32(sequence);
-	frame->value_le = sys_cpu_to_le32(value);
+	frame->payload_length_le = sys_cpu_to_le32(value);
 }
 
 static bool frame_is_valid(const struct app_ipc_frame *frame, size_t len,
 			   enum app_ipc_frame_type type)
 {
-	return (len == sizeof(*frame)) &&
+	return (len >= sizeof(*frame)) &&
 	       (sys_le32_to_cpu(frame->magic_le) == APP_IPC_FRAME_MAGIC) &&
 	       (sys_le16_to_cpu(frame->version_le) == APP_IPC_FRAME_VERSION) &&
 	       (sys_le16_to_cpu(frame->type_le) == (uint16_t)type);
@@ -64,16 +69,55 @@ static void endpoint_unbound(void *priv)
 static void endpoint_received(const void *data, size_t len, void *priv)
 {
 	const struct app_ipc_frame *frame = data;
+	uint16_t type;
 
 	ARG_UNUSED(priv);
 
-	if (!frame_is_valid(frame, len, APP_IPC_FRAME_PONG)) {
+	if ((len < sizeof(*frame)) ||
+	    (sys_le32_to_cpu(frame->magic_le) != APP_IPC_FRAME_MAGIC) ||
+	    (sys_le16_to_cpu(frame->version_le) != APP_IPC_FRAME_VERSION)) {
 		atomic_set(&last_error, -EBADMSG);
 		return;
 	}
 
-	atomic_set(&received_sequence, (atomic_val_t)sys_le32_to_cpu(frame->sequence_le));
-	k_sem_give(&pong_sem);
+	type = sys_le16_to_cpu(frame->type_le);
+	if (type == APP_IPC_FRAME_PONG) {
+		if (!frame_is_valid(frame, len, APP_IPC_FRAME_PONG) ||
+		    (len != sizeof(*frame)) ||
+		    (sys_le32_to_cpu(frame->payload_length_le) != 0U)) {
+			atomic_set(&last_error, -EBADMSG);
+			return;
+		}
+
+		atomic_set(&received_sequence,
+			   (atomic_val_t)sys_le32_to_cpu(frame->sequence_le));
+		k_sem_give(&pong_sem);
+		return;
+	}
+
+	if (type == APP_IPC_FRAME_MOTOR_STATE) {
+		const struct app_motor_state_message *message = data;
+		k_spinlock_key_t key;
+
+		if ((len != sizeof(*message)) ||
+		    (sys_le32_to_cpu(frame->payload_length_le) !=
+		     APP_MOTOR_STATE_WORD_COUNT * sizeof(uint16_t))) {
+			atomic_set(&last_error, -EBADMSG);
+			return;
+		}
+
+		key = k_spin_lock(&motor_state_lock);
+		for (size_t i = 0; i < APP_MOTOR_STATE_WORD_COUNT; i++) {
+			motor_state_cache.words[i] = sys_le16_to_cpu(message->words_le[i]);
+		}
+		motor_state_cache.sequence = sys_le32_to_cpu(frame->sequence_le);
+		motor_state_cache.age_ms = k_uptime_get_32();
+		motor_state_cache.valid = true;
+		k_spin_unlock(&motor_state_lock, key);
+		return;
+	}
+
+	atomic_set(&last_error, -EBADMSG);
 }
 
 static void endpoint_error(const char *message, void *priv)
@@ -147,9 +191,19 @@ int app_ipc_ping(uint32_t *round_trip_ms)
 	sequence = (uint32_t)atomic_inc(&next_sequence) + 1U;
 	atomic_set(&received_sequence, 0);
 	start_ms = k_uptime_get_32();
-	frame_init(&frame, APP_IPC_FRAME_PING, sequence, start_ms);
+	frame_init(&frame, APP_IPC_FRAME_PING, sequence, 0U);
 
-	ret = ipc_service_send(&ipc_endpoint, &frame, sizeof(frame));
+	for (uint32_t attempt = 0U; ; attempt++) {
+		ret = ipc_service_send(&ipc_endpoint, &frame, sizeof(frame));
+		if ((ret >= 0) || ((ret != -EAGAIN) && (ret != -EBUSY) &&
+				     (ret != -ENOBUFS)) ||
+		    (attempt >= APP_IPC_SEND_RETRY_MS)) {
+			break;
+		}
+
+		k_msleep(1);
+	}
+
 	if (ret < 0) {
 		atomic_set(&last_error, ret);
 		k_mutex_unlock(&ping_lock);
@@ -158,9 +212,9 @@ int app_ipc_ping(uint32_t *round_trip_ms)
 
 	ret = k_sem_take(&pong_sem, K_MSEC(APP_IPC_PING_TIMEOUT_MS));
 	if (ret < 0) {
-		atomic_set(&last_error, ret);
+		atomic_set(&last_error, -ETIMEDOUT);
 		k_mutex_unlock(&ping_lock);
-		return ret;
+		return -ETIMEDOUT;
 	}
 
 	if ((uint32_t)atomic_get(&received_sequence) != sequence) {
@@ -186,6 +240,30 @@ void app_ipc_get_status(struct app_ipc_status *status)
 	status->last_error = (int)atomic_get(&last_error);
 }
 
+void app_ipc_get_motor_state(struct app_ipc_motor_state *state)
+{
+	k_spinlock_key_t key;
+	uint32_t now;
+
+	if (state == NULL) {
+		return;
+	}
+
+	key = k_spin_lock(&motor_state_lock);
+	*state = motor_state_cache;
+	k_spin_unlock(&motor_state_lock, key);
+
+	if (!state->valid) {
+		state->stale = true;
+		state->age_ms = 0U;
+		return;
+	}
+
+	now = k_uptime_get_32();
+	state->age_ms = now - state->age_ms;
+	state->stale = state->age_ms > APP_IPC_MOTOR_STATE_STALE_MS;
+}
+
 static int cmd_m4_ping(const struct shell *sh, size_t argc, char **argv)
 {
 	uint32_t round_trip_ms;
@@ -196,7 +274,11 @@ static int cmd_m4_ping(const struct shell *sh, size_t argc, char **argv)
 
 	ret = app_ipc_ping(&round_trip_ms);
 	if (ret < 0) {
-		shell_error(sh, "M4 ping failed: %d", ret);
+		if (ret == -ETIMEDOUT) {
+			shell_error(sh, "M4 ping timed out waiting for PONG");
+		} else {
+			shell_error(sh, "M4 ping request could not be sent: %d", ret);
+		}
 		return ret;
 	}
 
@@ -218,9 +300,44 @@ static int cmd_m4_status(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
+static int cmd_m4_state(const struct shell *sh, size_t argc, char **argv)
+{
+	struct app_ipc_motor_state state;
+
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	app_ipc_get_motor_state(&state);
+	if (!state.valid) {
+		shell_error(sh, "No motor state received from M4 yet");
+		return -EAGAIN;
+	}
+
+	shell_print(sh, "State sequence : %u", (unsigned int)state.sequence);
+	shell_print(sh, "Cache age      : %u ms%s", (unsigned int)state.age_ms,
+		    state.stale ? " (stale)" : "");
+	shell_print(sh, "Flags          : 0x%04x", state.words[APP_MOTOR_STATE_FLAGS]);
+	shell_print(sh, "Applied PWM    : %u permille",
+		    state.words[APP_MOTOR_STATE_APPLIED_DUTY_PERMILLE]);
+	shell_print(sh, "Target PWM     : %u permille",
+		    state.words[APP_MOTOR_STATE_TARGET_DUTY_PERMILLE]);
+	shell_print(sh, "Direction      : %s",
+		    state.words[APP_MOTOR_STATE_DIRECTION] == 0U ? "forward" : "reverse");
+	shell_print(sh, "Fault code     : %d",
+		    (int16_t)state.words[APP_MOTOR_STATE_FAULT_CODE]);
+	shell_print(sh, "Buttons        : 0x%04x",
+		    state.words[APP_MOTOR_STATE_BUTTONS]);
+	shell_print(sh, "Potentiometer  : %u / 4095",
+		    state.words[APP_MOTOR_STATE_POTENTIOMETER_RAW]);
+	shell_print(sh, "M4 heartbeat   : %u",
+		    state.words[APP_MOTOR_STATE_HEARTBEAT]);
+	return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(m4_cmds,
 	SHELL_CMD(ping, NULL, "Ping the M4 over IPC", cmd_m4_ping),
 	SHELL_CMD(status, NULL, "Show M7-to-M4 IPC status", cmd_m4_status),
+	SHELL_CMD(state, NULL, "Show cached M4 motor state", cmd_m4_state),
 	SHELL_SUBCMD_SET_END
 );
 

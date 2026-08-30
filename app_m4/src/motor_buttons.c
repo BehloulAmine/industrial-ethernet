@@ -94,3 +94,16 @@ uint32_t app_motor_buttons_poll(void)
 
 	return events;
 }
+
+uint16_t app_motor_buttons_get_state(void)
+{
+	uint16_t state = 0U;
+
+	for (size_t i = 0; i < ARRAY_SIZE(buttons); i++) {
+		if (buttons[i].stable) {
+			state |= (uint16_t)buttons[i].event;
+		}
+	}
+
+	return state;
+}

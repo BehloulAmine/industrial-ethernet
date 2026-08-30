@@ -10,5 +10,6 @@
 
 int app_motor_buttons_init(void);
 uint32_t app_motor_buttons_poll(void);
+uint16_t app_motor_buttons_get_state(void);
 
 #endif /* APP_MOTOR_BUTTONS_H_ */
