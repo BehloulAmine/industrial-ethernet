@@ -15,6 +15,7 @@
 #include "app_modbus_tcp.h"
 #include "app_dpws.h"
 #include "app_eip.h"
+#include "app_ipc.h"
 #include "app_lcd.h"
 #include "app_web.h"
 #include "net_cfg.h"
@@ -91,6 +92,11 @@ int main(void)
 	ret = net_cfg_start(iface);
 	if (ret < 0) {
 		LOG_ERR("net_cfg_start failed: %d", ret);
+	}
+
+	ret = app_ipc_init();
+	if (ret < 0) {
+		LOG_WRN("app_ipc_init failed: %d", ret);
 	}
 
 	ret = app_modbus_tcp_start();

@@ -1,7 +1,9 @@
 # Application moteur Cortex-M4
 
 Cette image réalise la phase 9 locale : boutons, potentiomètre, machine d'état et
-commande PWM. Elle reste autonome et sans IPC avec le M7.
+commande PWM. Elle reste autonome pour le pilotage du moteur. La phase 10.1 ajoute
+un canal IPC de diagnostic avec le M7, sans encore exposer de commande moteur à
+distance.
 
 ## Build et flash
 
@@ -13,6 +15,41 @@ west flash -d build_m4
 
 La STM32H747I-DISCO démarre normalement les deux cœurs. L'image M7 réside à
 `0x08000000` et l'image M4 à `0x08100000`. Flasher l'une ne doit pas remplacer l'autre.
+
+## Validation IPC M7 ↔ M4 — phase 10.1
+
+Les deux images utilisent le backend Zephyr `IPC Service` / `icmsg`, deux zones
+non cacheables de 32 KiB dans la SRAM4 partagée, et les mailboxes matériels.
+L'endpoint commun s'appelle `motor-control`.
+
+Construire puis flasher les deux cœurs, avant de tester depuis le shell UART du M7 :
+
+```bash
+west build -p always -d build_m7 \
+  -b stm32h747i_disco/stm32h747xx/m7 app_m7 -- \
+  -DSHIELD=st_b_lcd40_dsi1_mb1166 -DEXTRA_CONF_FILE=lcd.conf
+west flash -d build_m7 --runner openocd
+
+west build -p always -d build_m4 \
+  -b stm32h747i_disco/stm32h747xx/m4 app_m4
+west flash -d build_m4 --runner openocd
+```
+
+```text
+uart:~$ m4 status
+IPC initialized : yes
+M4 endpoint    : bound
+Last error     : 0
+
+uart:~$ m4 ping
+M4 pong in 0..20 ms
+```
+
+Le délai dépend de la boucle M4 de 10 ms et de l'ordonnancement des deux cœurs ;
+une valeur comprise entre 0 et 20 ms est normale. Si l'endpoint reste `unbound`,
+vérifier que les deux images ont été flashées puis effectuer un reset matériel de la carte.
+Le moteur demeure exclusivement contrôlé par ses boutons et son potentiomètre à
+cette étape.
 
 ## Comportement
 

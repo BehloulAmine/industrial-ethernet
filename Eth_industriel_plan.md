@@ -37,7 +37,7 @@ Le plan est structuré en **phases 0 à 15**, chacune apportant une couche fonct
 | **Phase 7** | IPv6, identification et HTTP dual-stack | Ping IPv6, commande `ident`, dashboard sur IPv4 et IPv6 |
 | **Phase 8** | DPWS / WS-Discovery (UDP multicast 3702) | Découverte auto depuis WSDiscoveryTool |
 | **Phase 9** | Application M4 et commande locale du moteur DC | Moteur piloté par boutons, L293D et PWM, état sur LD3/LD4 |
-| **Phase 10** | IPC M7↔M4 et commande distante | Moteur commandable par Modbus, EtherNet/IP et Web |
+| **Phase 10** | IPC M7↔M4, cache d'état et commande distante | M7 multi-protocole, M4 autorité moteur et contrat variateur versionné |
 | **Phase 11** | Sécurité HTTP : login, tokens, HTTPS/TLS | Interface protégée par login + TLS (certif ECC P-256) |
 | **Phase 12** | Firmware Update + rollback MCUboot | Upload d'un `.bin` signé via le web, rollback auto |
 | **Phase 13** | Signature ECDSA des images | Seule une image signée par la clé légitime s'installe |
@@ -482,63 +482,114 @@ avec un état clair sur LD3/LD4 et un démarrage systématiquement sûr.
 
 ---
 
-### Phase 10 — IPC M7↔M4 et commande distante du moteur
+### Phase 10 — IPC M7↔M4, cache d'état et commande distante du moteur
 
-Objectif : transformer le M7 en passerelle de communication industrielle, tout en laissant au M4
-la propriété exclusive du matériel moteur et des décisions temps réel.
+Objectif : faire du M7 une passerelle industrielle multi-protocole et conserver le M4 comme
+unique autorité sur le matériel moteur, les décisions temps réel et l'état réellement appliqué.
 
-**Étape 10.1 — Canal inter-cœur**
+```text
+PLC / Web / LCD
+      │ Modbus TCP, EtherNet/IP ou REST
+      ▼
+M7 : protocoles, arbitrage, cache d'état moteur
+      │ IPC Service / icmsg
+      ▼
+M4 : boutons, potentiomètre, PWM, L293D, sécurité et état réel
+```
+
+Le M7 ne lit jamais directement les variables moteur du M4. Le M4 publie un snapshot d'état
+versionné ; le M7 le met en cache puis répond localement et sans attente aux lecteurs Modbus,
+EtherNet/IP, Web et LCD. Une lecture cyclique externe ne déclenche donc pas une requête IPC.
+
+**Étape 10.1 — Canal inter-cœur et cache M7**
 - Utiliser **Zephyr IPC Service avec le backend `icmsg`**, déjà supporté par les overlays
   STM32H747I-DISCO M7 et M4 de Zephyr 4.4.
 - Réserver la SRAM partagée et les mailboxes dans les devicetrees des deux images.
-- Créer un endpoint `motor-control` et valider d'abord un échange ping/pong bidirectionnel.
-- Laisser le backend gérer la synchronisation et la cohérence de la mémoire partagée ; ne pas
-  partager directement une structure C brute entre les caches M7 et M4.
+- Créer l'endpoint `motor-control`, valider un ping/pong bidirectionnel, puis les notifications
+  de disponibilité, redémarrage et incompatibilité de version.
+- Laisser le backend gérer la synchronisation et la cohérence de la mémoire partagée : ne jamais
+  partager une structure C brute entre les caches M7 et M4.
+- Créer côté M7 un cache atomiquement remplacé : dernier état M4, numéro de séquence, timestamp
+  local de réception et indicateur `m4_state_valid` / `m4_state_stale`.
+- Faire publier au M4 un état périodique de petite taille, au départ toutes les 10 ms. Un client
+  qui scanne à 10 ms lit le cache M7 ; la cible est un état âgé de 10 à 20 ms, jamais une attente
+  IPC dans le traitement Modbus ou EtherNet/IP.
 
-**Étape 10.2 — Contrat de données versionné**
-- Définir des messages de taille fixe avec `magic`, version, taille et numéro de séquence.
-- Séparer impérativement les commandes M7→M4 des états M4→M7.
-- Image de commande proposée, 10 mots de 16 bits :
-  - mot 0 : enable, run, direction, reset fault, quick stop ;
-  - mot 1 : consigne PWM `0..1000` ;
-  - mots 2/3 : rampes d'accélération/décélération ;
-  - mot 4 : mode et source de commande ;
-  - mot 5 : timeout de communication ;
-  - mots 6..8 : réservés ; mot 9 : séquence de commande.
-- Image d'état proposée, 10 mots de 16 bits :
-  - mot 0 : ready, running, stopping, fault, local, remote ;
-  - mot 1 : PWM réellement appliqué ; mot 2 : direction ; mot 3 : code défaut ;
-  - mot 4 : état des boutons ; mot 5 : valeur potentiomètre filtrée ;
-  - mots 6/7 : âge de commande et temps de boucle ;
-  - mot 8 : heartbeat M4 ; mot 9 : séquence d'état.
+**Étape 10.2 — Contrat moteur partagé et versionné**
+- Créer un unique header partagé, par exemple `app_shared/app_motor_contract.h`, inclus par M7
+  et M4. Il définit les types à taille fixe, magic, version, longueur, endianess, bits et indices
+  de mots ; le M4 ne doit pas inclure `modbus_map.h`.
+- Séparer impérativement les commandes M7→M4 des états M4→M7. Chaque message porte un numéro de
+  séquence ; le M4 accuse dans son état la dernière séquence validée et appliquée.
+- Image de commande initiale, 10 mots de 16 bits :
+  - mot 0 : `enable`, `run`, direction demandée, `reset_fault`, `quick_stop` ;
+  - mot 1 : consigne PWM demandée, bornée à `800..1000` ;
+  - mots 2/3 : rampes d'accélération et de décélération ;
+  - mot 4 : mode local/distant et source externe propriétaire ;
+  - mot 5 : timeout de commande distante ;
+  - mots 6..8 : réservés à zéro ; mot 9 : séquence de commande.
+- Image d'état initiale, 12 mots de 16 bits :
+  - mot 0 : `disabled`, `ready`, `running`, `stopping`, `fault`, `local`, `remote`, IPC valide ;
+  - mot 1 : PWM réellement appliqué ; mot 2 : consigne PWM acceptée ; mot 3 : direction réelle ;
+  - mot 4 : code défaut ; mot 5 : état des boutons ; mot 6 : potentiomètre filtré ;
+  - mots 7/8 : âge de la commande distante et temps de boucle M4 ;
+  - mot 9 : heartbeat M4 ; mot 10 : dernière séquence acceptée ; mot 11 : réservé.
+- Les états transmis sont des **consignes PWM** et non des vitesses en tr/min tant qu'aucun
+  encodeur n'est installé.
 
-**Étape 10.3 — Modes local et distant**
-- En mode local, les boutons et le potentiomètre pilotent le moteur directement sur le M4.
-- En mode distant, le M4 applique les commandes reçues du M7 après validation des bornes.
-- Le bouton physique `STOP` reste actif et prioritaire dans tous les modes.
-- En cas de perte IPC ou de commande trop ancienne, appliquer une décélération contrôlée puis
-  passer dans un état sûr ; ne jamais conserver indéfiniment la dernière consigne.
-- Publier la source propriétaire courante afin que Web, Modbus et EtherNet/IP expliquent pourquoi
-  une commande est acceptée ou refusée.
+**Étape 10.3 — Modes local, distant et sûreté**
+- En mode local, boutons et potentiomètre pilotent directement le M4 ; les commandes réseau sont
+  visibles mais refusées avec une raison publiée dans l'état.
+- En mode distant, le M4 applique uniquement les commandes IPC valides : version, taille,
+  séquence, bornes PWM/rampes et source autorisée.
+- Le bouton physique `STOP` reste prioritaire dans tous les modes. `RESET` et un défaut matériel
+  restent des arrêts locaux ; aucun protocole M7 ne contourne cette décision.
+- Le M7 arbitre les écritures Modbus, EtherNet/IP et Web avant de créer l'image M7→M4. Le M4 reste
+  la dernière barrière de validation et la source de vérité de l'état appliqué.
+- Rafraîchir une commande distante même si elle est inchangée. En cas de perte IPC, séquence trop
+  ancienne ou timeout dépassé, le M4 applique la rampe d'arrêt puis passe à un état sûr.
 
-**Étape 10.4 — Exposition Modbus, EtherNet/IP, Web et LCD**
-- Modbus : réserver deux zones distinctes pour la commande et l'état moteur. Incrémenter
-  `APP_MODBUS_MAP_VERSION` puisque le contrat public évolue, sans changer sa signature `0x0747`.
-- EtherNet/IP : utiliser l'Assembly 100 comme sortie PLC/commande et l'Assembly 101 comme
-  entrée PLC/état ; supprimer leur miroir actuel sur la même fenêtre de dix mots.
-- Web/REST : ajouter les endpoints état/commande et une vue moteur avec mode, consigne,
-  PWM appliqué, direction et défaut.
-- LCD M7 : ajouter une synthèse en lecture seule et les commandes autorisées par l'arbitrage.
+**Étape 10.4 — Contrat Modbus et exposition des protocoles**
+- Garder `modbus_map.h` côté M7 : il décrit les adresses Modbus publiques et ne duplique pas les
+  données moteur. Le contrat moteur partagé définit les champs ; le mapping Modbus les associe à
+  des adresses.
+- Conserver la signature `APP_MODBUS_MAP_SIGNATURE = 0x0747` et incrémenter
+  `APP_MODBUS_MAP_VERSION` à `2` car le contrat public évolue.
+- Réserver deux zones Modbus distinctes, avec contrôle des droits :
+  - Holding Registers moteur : écritures de commande (`control word`, consigne PWM, rampes, mode,
+    timeout, séquence) ;
+  - Input Registers moteur : état en lecture seule issu du cache M7 (état, PWM appliqué,
+    direction, défaut, potentiomètre, heartbeat, âge de l'état et séquence acquittée).
+- Garder les registres de configuration réseau sous responsabilité M7. Réserver ou revoir la
+  fenêtre scanner Unit-ID 2 afin qu'elle ne permette jamais d'écrire un registre d'état moteur
+  en lecture seule ; définir explicitement son mapping par défaut après ce changement.
+- EtherNet/IP : utiliser l'Assembly 100 comme image de sortie PLC/commande et l'Assembly 101 comme
+  image d'entrée PLC/état. Supprimer leur miroir actuel sur la fenêtre scanner. Aligner leurs mots
+  sur le contrat moteur sans les confondre avec les adresses Modbus ; conserver l'ordre little-endian
+  CIP.
+- Web/REST : ajouter `/api/motor/state` et `/api/motor/command`, une vue moteur avec source,
+  consigne, PWM appliqué, direction, défaut et âge du cache. Une écriture répond que la commande a
+  été mise en file ; l'état et la séquence acquittée confirment ensuite son application par le M4.
+- LCD M7 : afficher une synthèse lecture seule du cache ; n'exposer que les commandes autorisées
+  par l'arbitrage courant.
+- Shell M7 : ajouter `m4 status` puis `m4 threads`. La seconde commande demande un snapshot au M4
+  par IPC ; elle n'essaie pas de parcourir la liste de threads du kernel M4 depuis le kernel M7.
 
-**Étape 10.5 — Tests d'intégration et de défaut**
-- Tester séparément les commandes Web, Modbus et EtherNet/IP, puis leur concurrence.
-- Tester la priorité du mode local, le bouton `STOP`, les messages invalides et les séquences
-  anciennes.
-- Redémarrer chaque cœur séparément et débrancher Ethernet pendant que le moteur tourne.
-- Vérifier que la perte M7/IPC/réseau conduit toujours le M4 vers l'état sûr défini.
+**Étape 10.5 — Tests de fréquence, intégration et défaut**
+- Mesurer la latence et l'âge du cache à publication M4 de 10 ms, avec Modbus et EtherNet/IP actifs.
+  Vérifier qu'un lecteur externe à 10 ms ne bloque jamais l'exécution du M4.
+- Tester séparément les commandes Web, Modbus et EtherNet/IP, puis leur concurrence et l'arbitrage
+  de source.
+- Tester le mode local, le bouton `STOP`, les commandes invalides, les séquences anciennes,
+  l'absence de refresh et les droits lecture seule des registres d'état.
+- Redémarrer chaque cœur séparément, arrêter l'IPC et débrancher Ethernet pendant que le moteur
+  tourne. Vérifier que le M4 atteint toujours l'état sûr défini et que le M7 publie un cache périmé.
+- Tester les bornes ADC/PWM, l'inversion uniquement à l'arrêt et la cohérence entre Modbus,
+  Assembly 101, REST et LCD pour une même séquence d'état M4.
 
-**Livrable :** un PLC ou le dashboard commande le moteur via le M7 ; le M4 conserve le contrôle
-temps réel, renvoie son état et arrête le moteur de manière déterministe en cas de défaut.
+**Livrable :** un PLC ou le dashboard commande le moteur via le M7 sans accéder directement au
+M4. Le M4 conserve le contrôle temps réel, publie son état à 100 Hz, arrête le moteur de façon
+déterministe en cas de défaut ou timeout et rend ce comportement visible par tous les protocoles.
 
 ---
 

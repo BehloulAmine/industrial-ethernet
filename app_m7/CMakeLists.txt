@@ -3,7 +3,9 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(industrial_ethernet)
 
 target_include_directories(app PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../app_shared
   src/core
+  src/ipc
   src/net
   src/protocols/dpws
   src/protocols/eip
@@ -15,6 +17,7 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
   src/core/main.c
   src/core/ident.c
+  src/ipc/app_ipc.c
   src/net/net_cfg.c
   src/shell/util_cmds.c
   src/protocols/dpws/app_dpws.c

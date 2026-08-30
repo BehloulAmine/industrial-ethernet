@@ -8,6 +8,7 @@
 #include "motor_buttons.h"
 #include "motor_control.h"
 #include "motor_potentiometer.h"
+#include "app_ipc.h"
 
 #define MOTOR_LOOP_PERIOD_MS 10
 #define READY_BLINK_PERIOD_MS 500
@@ -70,6 +71,9 @@ int main(void)
 	int motor_ret = app_motor_init();
 	int buttons_ret = app_motor_buttons_init();
 	int potentiometer_ret = app_motor_potentiometer_init();
+	int ipc_ret = app_ipc_init();
+
+	(void)ipc_ret;
 
 	if ((motor_ret < 0) || (buttons_ret < 0) || (potentiometer_ret < 0)) {
 		if (leds_ready) {
@@ -109,6 +113,7 @@ int main(void)
 		}
 
 		(void)app_motor_process(MOTOR_LOOP_PERIOD_MS);
+		app_ipc_process();
 
 		if (leds_ready) {
 			status_leds_update();
