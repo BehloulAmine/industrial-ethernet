@@ -213,6 +213,9 @@ Une cible `0xffff` utilise une valeur locale privée au scanner concerné. Les
 valeurs `0..59` sont admises comme cible de lecture ; pour Output, les zones
 d'état moteur en lecture seule et les tables de mapping sont refusées. Écrire
 `0` dans le slot Output 2 ne fait rien ; écrire `1` déclenche `APPLY`.
+Un `APPLY` via Unit-ID 2 revendique automatiquement le mode distant et met
+`REG10` à `1`. Les commandes shell `m4 remote` et `m4 local` maintiennent aussi
+ce registre synchronisé avec le mode réellement demandé au M4.
 
 ## Sauvegarde de la configuration réseau
 

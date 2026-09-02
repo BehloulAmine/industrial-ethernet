@@ -126,6 +126,12 @@ int app_modbus_scanner_output_reg_wr(uint16_t addr, uint16_t reg)
 	/* A cyclic output image keeps APPLY at zero until the PLC commits it. */
 	if ((holding_addr == APP_MB_HREG_MOTOR_APPLY) && (reg == 0U)) {
 		ret = 0;
+	} else if (holding_addr == APP_MB_HREG_MOTOR_APPLY) {
+		ret = unit1_reg_wr ? unit1_reg_wr(APP_MB_HREG_MOTOR_MODE,
+					       APP_MB_MOTOR_MODE_REMOTE) : -ENODEV;
+		if (ret >= 0) {
+			ret = unit1_reg_wr(APP_MB_HREG_MOTOR_APPLY, reg);
+		}
 	} else {
 		ret = unit1_reg_wr ? unit1_reg_wr(holding_addr, reg) : -ENODEV;
 	}

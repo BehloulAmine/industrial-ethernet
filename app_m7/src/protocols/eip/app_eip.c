@@ -236,7 +236,7 @@ EipStatus AfterAssemblyDataReceived(CipInstance *instance)
 	}
 
 	for (uint16_t i = 0U; i < APP_EIP_ASSEMBLY_WORD_COUNT; i++) {
-		int ret = app_modbus_scanner_holding_reg_wr(
+		int ret = app_modbus_scanner_output_reg_wr(
 			i, sys_get_le16(&output_assembly[i * sizeof(uint16_t)]));
 
 		if (ret < 0) {
@@ -257,7 +257,7 @@ EipBool8 BeforeAssemblyDataSend(CipInstance *instance)
 	for (uint16_t i = 0U; i < APP_EIP_ASSEMBLY_WORD_COUNT; i++) {
 		uint16_t value = 0U;
 
-		(void)app_modbus_scanner_holding_reg_rd(i, &value);
+		(void)app_modbus_scanner_input_reg_rd(i, &value);
 		sys_put_le16(value, &input_assembly[i * sizeof(uint16_t)]);
 	}
 	return true;

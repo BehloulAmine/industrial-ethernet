@@ -16,6 +16,7 @@
 
 #include "app_ipc_protocol.h"
 #include "app_motor_contract.h"
+#include "app_modbus_tcp.h"
 
 #define APP_IPC_PING_TIMEOUT_MS 250
 #define APP_IPC_SEND_RETRY_MS 20
@@ -316,6 +317,9 @@ static void remote_refresh_work_handler(struct k_work *work)
 
 	ret = send_remote_command_locked(true);
 	if (ret >= 0) {
+		ret = app_modbus_tcp_motor_set_mode(true);
+	}
+	if (ret >= 0) {
 		(void)k_work_reschedule(&remote_refresh_work,
 					K_MSEC(APP_IPC_REMOTE_REFRESH_MS));
 	}
@@ -395,6 +399,9 @@ static int remote_command_disable(void)
 	remote_command.source = APP_MOTOR_COMMAND_SOURCE_SHELL;
 	remote_command.timeout_ms = APP_IPC_REMOTE_TIMEOUT_MS;
 	ret = send_remote_command_locked(false);
+	if (ret >= 0) {
+		ret = app_modbus_tcp_motor_set_mode(false);
+	}
 	if (ret >= 0) {
 		remote_command.enabled = false;
 		remote_command.control = 0U;

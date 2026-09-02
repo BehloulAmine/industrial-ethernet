@@ -15,11 +15,13 @@ flowchart TD
     Port["opener_zephyr_port.c"] --> Sockets["zsock Zephyr"]
     Opener --> App["Callbacks app_eip.c"]
     App --> Identity["Identité CIP et MAC"]
-    App --> A100["Assembly 100 Output 20 octets"]
-    App --> A101["Assembly 101 Input 20 octets"]
+    App --> A100["Assembly 100 Output 10 octets"]
+    App --> A101["Assembly 101 Input 10 octets"]
     App --> A1["Assembly 1 Config vide"]
-    A100 --> Scanner["Écriture fenêtre scanner 10 mots"]
-    Scanner --> A101
+    A100 --> OutputScanner["Output scanner 5 mots"]
+    InputScanner["Input scanner 5 mots"] --> A101
+    OutputScanner --> M7["M7 : staging + APPLY"]
+    M4["M4 : état appliqué"] --> InputScanner
     NetCfg["IPv4 active net_cfg"] --> TCPIP["Objet TCP/IP CIP"]
 ```
 
@@ -45,16 +47,32 @@ workqueue système.
 | TCP/UDP encapsulation | 44818 |
 | UDP implicit I/O | 2222 |
 | Assembly configuration | instance 1, vide |
-| Assembly Output O-to-T | instance 100, 10 mots, 20 octets |
-| Assembly Input T-to-O | instance 101, 10 mots, 20 octets |
+| Assembly Output O-to-T | instance 100, 5 mots, 10 octets |
+| Assembly Input T-to-O | instance 101, 5 mots, 10 octets |
 | type de connexion | Exclusive Owner |
 | sessions explicites max | 6 |
 | connexions Exclusive Owner max | 1 |
 
 Les mots d'assemblies sont little-endian. Une réception sur l'assembly 100
-écrit les dix slots du scanner Modbus. Avant l'envoi de l'assembly 101, les dix
-slots sont relus. Modifier leur taille exige de modifier ensemble
-`APP_EIP_ASSEMBLY_WORD_COUNT`, les tailles d'assemblies et le contrat scanner.
+écrit les cinq slots de l'Output scanner Modbus ; avant l'envoi de l'assembly
+101, les cinq slots de l'Input scanner sont relus. Les adresses logiques sont
+donc identiques à Unit-ID 2 : slot 0 = fault/control, slot 1 = vitesse
+appliquée/consigne et slot 2 Output = `APPLY`. Modifier leur taille exige de
+modifier ensemble `APP_EIP_ASSEMBLY_WORD_COUNT`, les tailles d'assemblies et le
+contrat scanner.
+
+| Mot | Assembly 100, Output | Assembly 101, Input |
+|---:|---|---|
+| 0 | mot de contrôle moteur | code défaut M4 |
+| 1 | consigne PWM | PWM réellement appliqué |
+| 2 | `APPLY` (`1` valide la commande) | valeur locale Input |
+| 3 | valeur locale Output | valeur locale Input |
+| 4 | valeur locale Output | valeur locale Input |
+
+Un `APPLY` non nul venant de l'assembly 100 revendique automatiquement le mode
+distant et met `REG10` à `1`. Le PLC n'a donc pas besoin d'écrire ce registre
+avant sa première commande. Le retour en mode local reste une action explicite
+du shell ou du Unit-ID 1.
 
 ## Identité CIP
 
@@ -105,5 +123,5 @@ python tools/eip_probe.py <ip-carte>
 ```
 
 Compléter avec Wireshark (`enip || cip`) et un scanner EIP ouvrant une connexion
-Class 1 sur 100/101. Vérifier que les dix mots suivent la fenêtre scanner et que
-Web plus un client Modbus idle restent accessibles.
+Class 1 sur 100/101. Vérifier que les cinq mots suivent les scanners Input et
+Output, et que Web plus un client Modbus idle restent accessibles.

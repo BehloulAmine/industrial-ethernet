@@ -28,7 +28,7 @@ flowchart TD
     Net --> EIP
     Net --> Web
     Net --> DPWS
-    MB --> Scanner["Fenêtre scanner 10 mots"]
+    MB --> Scanner["Scanners Input / Output, 5 mots"]
     Scanner <--> EIP
     Scanner <--> Web
     Scanner --> LCD
@@ -81,8 +81,8 @@ Zephyr indiquées correspondent au build courant ; vérifier
   hardware ID, la MAC, les adresses IP et le UUID.
 - le tableau Unit-ID 1 Modbus est protégé par `holding_regs_lock` ; passer par
   les API publiques depuis Web, LCD et EIP ;
-- la fenêtre scanner contient dix mots et constitue le contrat de données
-  commun avec les assemblies EtherNet/IP 100/101 ;
+- les scanners directionnels contiennent chacun cinq mots et constituent le
+  contrat de données commun avec les assemblies EtherNet/IP 100/101 ;
 - les objets LVGL ne doivent être créés ou modifiés que par `app_lcd` ;
 - conserver `CONFIG_NET_MAX_CONN=16` au minimum : une valeur de 8 a déjà causé
   des refus HTTP avec EIP Class 1 et un client Modbus simultanés.

@@ -890,6 +890,12 @@ int app_modbus_tcp_holding_write(uint16_t addr, uint16_t value)
 	return holding_reg_wr(addr, value);
 }
 
+int app_modbus_tcp_motor_set_mode(bool remote)
+{
+	return holding_reg_wr(APP_MB_HREG_MOTOR_MODE,
+			      remote ? APP_MB_MOTOR_MODE_REMOTE : APP_MB_MOTOR_MODE_LOCAL);
+}
+
 uint16_t app_modbus_tcp_connection_count(void)
 {
 	return connection_count;

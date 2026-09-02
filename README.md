@@ -325,8 +325,8 @@ enip || cip
 
 Pour une connexion Class 1, utiliser :
 
-- Assembly 100 : 20 octets O-to-T ;
-- Assembly 101 : 20 octets T-to-O ;
+- Assembly 100 : 10 octets O-to-T (5 mots Output) ;
+- Assembly 101 : 10 octets T-to-O (5 mots Input) ;
 - Assembly 1 : configuration vide ;
 - Run/Idle header uniquement en O-to-T ;
 - Point-to-Point dans les deux directions ;

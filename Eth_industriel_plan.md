@@ -323,14 +323,14 @@ Objectif : ajouter une supervision locale sur l'écran tactile de la STM32H747I-
 **Étape 6.2 — Objets CIP basiques**
 - Objets standards OpENer : Identity (0x01), Assembly (0x04), TCP/IP Interface (0xF5), Ethernet Link (0xF6), Connection Manager et QoS.
 - **Configuration Assembly 1** : assembly vide de 0 octet pour les outils qui exigent un chemin de configuration.
-- **Output Assembly 100 (O→T)** : 20 octets écrits cycliquement par le PLC dans les 10 mots de la fenêtre scanner.
-- **Input Assembly 101 (T→O)** : 20 octets, soit les 10 mots de la fenêtre scanner, lus par le PLC.
+- **Output Assembly 100 (O→T)** : 10 octets écrits cycliquement par le PLC dans les 5 mots du scanner Output.
+- **Input Assembly 101 (T→O)** : 10 octets, soit les 5 mots du scanner Input, lus par le PLC.
 - Le mapping partagé garantit la cohérence entre EtherNet/IP, Modbus Unit-ID 2 et le webserver REST.
 - Les échanges multi-octets des assemblies utilisent l'ordre little-endian CIP.
 
 **Test :** `python tools/eip_probe.py <ip-carte>`, Wireshark (`enip || cip`), puis RSLinx, Studio 5000 ou EIPScanner pour ouvrir une connexion Class 1 sur 100/101.
 
-**Livrable :** la carte est un device EtherNet/IP identifiable, répond au messaging explicite et échange 10 mots cycliques via les assemblies 100/101.
+**Livrable :** la carte est un device EtherNet/IP identifiable, répond au messaging explicite et échange deux images cycliques directionnelles de 5 mots via les assemblies 100/101.
 
 ---
 
@@ -578,6 +578,8 @@ EtherNet/IP, Web et LCD. Une lecture cyclique externe ne déclenche donc pas une
     écriture indirecte dans l'état M4.
   - Le même Unit-ID `2` est conservé : une lecture donne toujours l'image Input et une écriture
     agit toujours sur l'image Output. FC23 écrit l'image Output avant de relire l'image Input.
+    Un `APPLY` Output revendique le mode distant afin que Modbus, EtherNet/IP et le shell partagent
+    une seule notion cohérente de contrôle local/distant.
 - EtherNet/IP : réduire les assemblies à cinq mots et les relier directement aux deux scanners :
   Assembly 100 = Output scanner (commande PLC), Assembly 101 = Input scanner (état PLC).
   Conserver l'ordre little-endian CIP et les droits directionnels identiques à Modbus.
