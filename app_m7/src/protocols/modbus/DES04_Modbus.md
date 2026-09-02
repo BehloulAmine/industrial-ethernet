@@ -2,8 +2,8 @@
 
 Ce module implémente le serveur Modbus TCP IPv4 sur le port 502, le contrat de
 60 holding registers du Unit-ID 1 et deux images scanner directionnelles de
-cinq mots sur le Unit-ID 2. Le refactoring EtherNet/IP, Web et LCD vers ces
-deux images est réalisé dans les sous-livrables suivants de la phase 10.4.
+cinq mots sur le Unit-ID 2. EtherNet/IP et le Web utilisent directement ces
+deux images ; le LCD lit le cache moteur M4 en lecture seule.
 
 ## Architecture
 
@@ -42,7 +42,7 @@ flowchart TD
 
 - `holding_regs_lock` protège les 60 holding registers et l'état de commande.
 - `scanner_local_regs_lock` protège les valeurs locales Input, Output et la
-  zone de compatibilité temporaire utilisée par EIP/Web.
+  zone de compatibilité legacy conservée pour les anciens appelants.
 - `raw_response_ready` synchronise le serveur socket avec le backend Modbus
   RAW Zephyr.
 - `command_done` synchronise la FC d'écriture avec la sauvegarde asynchrone.
@@ -228,7 +228,7 @@ registre 9. Le timeout appelant est de 5 s et le timeout RAW de 6 s.
 
 - `app_modbus_tcp_holding_read/write()` : Web et autres producteurs locaux ;
 - `app_modbus_scanner_input_reg_rd()` et `output_reg_wr()` : Unit-ID 2 ;
-- `app_modbus_scanner_holding_reg_rd/wr()` : compatibilité temporaire EIP/Web/LCD ;
+- `app_modbus_scanner_holding_reg_rd/wr()` : API legacy, sans protocole actif ;
 - `app_modbus_tcp_connection_count()` et `heartbeat_count()` : Web/LCD ;
 - `app_modbus_tcp_heartbeat_tick()` : boucle `main`.
 

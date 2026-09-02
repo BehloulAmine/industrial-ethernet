@@ -14,7 +14,7 @@ flowchart TD
     Thread --> Refresh["Refresh toutes les 500 ms"]
     Net["net_cfg"] --> Refresh
     Modbus["Compteurs et holding status"] --> Refresh
-    Scanner["5 premiers slots scanner"] --> Refresh
+    IPC["Cache d'état moteur M4"] --> Refresh
     Touch["Événements tactiles"] --> Thread
     Touch --> Sleep["Standby et wake"]
     Touch --> Confirm["Double confirmation reboot"]
@@ -32,7 +32,7 @@ flowchart TD
 | période boucle | 10 ms pour `lv_timer_handler()` |
 | période données | 500 ms |
 | état initial | écran en standby |
-| slots scanner affichés | 5 sur 10 |
+| données moteur | cache IPC M4, lecture seule |
 
 Tous les objets et appels LVGL sont possédés par `app_lcd`. Ne jamais mettre à
 jour un label ou un widget depuis `main`, le Web, une callback réseau ou une
@@ -63,10 +63,14 @@ dans `main()`.
 - nombre cumulé de connexions Modbus ;
 - heartbeat ;
 - dernier statut de commande Modbus ;
-- cinq premières valeurs de la fenêtre scanner.
+- mode local/distant du variateur M4 ;
+- état moteur, vitesse appliquée et consigne ;
+- direction, code défaut et état de sécurité (`STOP latched`, timeout ou OK).
 
-Les données viennent des API `net_cfg`, `app_modbus_tcp` et
-`app_modbus_scanner`. Le dashboard ne possède aucune copie persistante.
+Les données viennent des API `net_cfg`, `app_modbus_tcp` et `app_ipc`. Le
+dashboard lit uniquement le cache M7 publié par le M4 : il ne bloque jamais
+pour interroger le M4 et ne peut pas commander le moteur. Le dashboard ne
+possède aucune copie persistante.
 
 ## Standby et réveil
 

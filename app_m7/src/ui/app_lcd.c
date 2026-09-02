@@ -14,8 +14,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/reboot.h>
 
+#include "app_ipc.h"
 #include "app_lcd.h"
-#include "app_modbus_scanner.h"
 #include "app_modbus_tcp.h"
 #include "modbus_map.h"
 #include "net_cfg.h"
@@ -25,7 +25,6 @@ LOG_MODULE_REGISTER(app_lcd, LOG_LEVEL_INF);
 #define APP_LCD_THREAD_STACK_SIZE 4096
 #define APP_LCD_THREAD_PRIORITY 9
 #define APP_LCD_REFRESH_MS 500U
-#define APP_LCD_SCANNER_ROWS 5U
 #define APP_LCD_REBOOT_CONFIRM_MS 3000U
 #define APP_LCD_START_IN_STANDBY 1
 
@@ -58,8 +57,13 @@ static lv_obj_t *heartbeat_value;
 static lv_obj_t *link_value;
 static lv_obj_t *modbus_value;
 static lv_obj_t *status_value;
-static lv_obj_t *scanner_bars[APP_LCD_SCANNER_ROWS];
-static lv_obj_t *scanner_values[APP_LCD_SCANNER_ROWS];
+static lv_obj_t *motor_mode_value;
+static lv_obj_t *motor_state_value;
+static lv_obj_t *motor_applied_value;
+static lv_obj_t *motor_target_value;
+static lv_obj_t *motor_direction_value;
+static lv_obj_t *motor_fault_value;
+static lv_obj_t *motor_safety_value;
 static lv_obj_t *reboot_button;
 static lv_obj_t *reboot_label;
 static lv_obj_t *sleep_button;
@@ -233,38 +237,27 @@ static void create_network_panel(lv_obj_t *screen)
 				  lv_color_hex(0xf7fafc));
 }
 
-static void create_scanner_panel(lv_obj_t *screen)
+static lv_obj_t *make_motor_value(lv_obj_t *panel, const char *name, int32_t y)
+{
+	make_label(panel, name, 0, y, &lv_font_montserrat_14,
+		   lv_color_hex(0x93a4b8));
+	return make_label(panel, "-", 205, y, &lv_font_montserrat_14,
+			  lv_color_hex(0xf7fafc));
+}
+
+static void create_motor_panel(lv_obj_t *screen)
 {
 	lv_obj_t *panel = make_panel(screen, 400, 180, 380, 244);
 
-	make_label(panel, "Process window", 0, 0, &lv_font_montserrat_20,
+	make_label(panel, "Motor controller (M4)", 0, 0, &lv_font_montserrat_20,
 		   lv_color_hex(0xf7fafc));
-
-	for (uint32_t i = 0; i < APP_LCD_SCANNER_ROWS; i++) {
-		int32_t y = 45 + (int32_t)i * 34;
-		lv_obj_t *bar;
-
-		lv_obj_t *slot = make_label(panel, "S0", 0, y,
-					    &lv_font_montserrat_14,
-					    lv_color_hex(0x93a4b8));
-		lv_label_set_text_fmt(slot, "S%u", (unsigned int)i);
-
-		bar = lv_bar_create(panel);
-		lv_obj_set_pos(bar, 38, y + 2);
-		lv_obj_set_size(bar, 245, 12);
-		lv_bar_set_range(bar, 0, UINT16_MAX);
-		lv_obj_set_style_bg_color(bar, lv_color_hex(0x2b3949), LV_PART_MAIN);
-		lv_obj_set_style_bg_color(bar, lv_color_hex(0x2f6fed), LV_PART_INDICATOR);
-		lv_obj_set_style_radius(bar, 4, LV_PART_MAIN);
-		lv_obj_set_style_radius(bar, 4, LV_PART_INDICATOR);
-		scanner_bars[i] = bar;
-
-		scanner_values[i] = make_label(panel, "0", 296, y - 2,
-					       &lv_font_montserrat_14,
-					       lv_color_hex(0xf7fafc));
-		lv_obj_set_width(scanner_values[i], 52);
-		lv_obj_set_style_text_align(scanner_values[i], LV_TEXT_ALIGN_RIGHT, 0);
-	}
+	motor_mode_value = make_motor_value(panel, "Control mode", 40);
+	motor_state_value = make_motor_value(panel, "Motor state", 66);
+	motor_applied_value = make_motor_value(panel, "Applied speed", 92);
+	motor_target_value = make_motor_value(panel, "Target speed", 118);
+	motor_direction_value = make_motor_value(panel, "Direction", 144);
+	motor_fault_value = make_motor_value(panel, "Fault", 170);
+	motor_safety_value = make_motor_value(panel, "Safety", 196);
 }
 
 static void create_dashboard(void)
@@ -312,7 +305,7 @@ static void create_dashboard(void)
 	heartbeat_value = make_kpi(screen, "Heartbeat", 605);
 
 	create_network_panel(screen);
-	create_scanner_panel(screen);
+	create_motor_panel(screen);
 
 	make_label(screen, "HTTP 80", 20, 449, &lv_font_montserrat_14,
 		   lv_color_hex(0x708399));
@@ -325,7 +318,10 @@ static void create_dashboard(void)
 static void refresh_dashboard(void)
 {
 	struct net_cfg_data active = { 0 };
+	struct app_ipc_motor_state motor_state;
+	uint16_t flags;
 	uint16_t status = 0U;
+	bool remote;
 
 	if (net_cfg_get_active(&active) == 0) {
 		lv_label_set_text(ip_value, active.ip);
@@ -346,12 +342,49 @@ static void refresh_dashboard(void)
 		lv_label_set_text_fmt(status_value, "%d", (int16_t)status);
 	}
 
-	for (uint16_t i = 0; i < APP_LCD_SCANNER_ROWS; i++) {
-		uint16_t value = 0U;
+	app_ipc_get_motor_state(&motor_state);
+	if (!motor_state.valid) {
+		lv_label_set_text(motor_mode_value, "Unavailable");
+		lv_label_set_text(motor_state_value, "IPC unavailable");
+		lv_label_set_text(motor_applied_value, "-");
+		lv_label_set_text(motor_target_value, "-");
+		lv_label_set_text(motor_direction_value, "-");
+		lv_label_set_text(motor_fault_value, "-");
+		lv_label_set_text(motor_safety_value, "-");
+		return;
+	}
 
-		(void)app_modbus_scanner_holding_reg_rd(i, &value);
-		lv_bar_set_value(scanner_bars[i], value, LV_ANIM_OFF);
-		lv_label_set_text_fmt(scanner_values[i], "%u", (unsigned int)value);
+	flags = motor_state.words[APP_MOTOR_STATE_FLAGS];
+	remote = (flags & APP_MOTOR_STATE_FLAG_REMOTE) != 0U;
+
+	lv_label_set_text(motor_mode_value, remote ? "Remote" : "Local");
+	if ((flags & APP_MOTOR_STATE_FLAG_FAULT) != 0U) {
+		lv_label_set_text(motor_state_value, "Fault");
+	} else if ((flags & APP_MOTOR_STATE_FLAG_STOPPING) != 0U) {
+		lv_label_set_text(motor_state_value, "Stopping");
+	} else if ((flags & APP_MOTOR_STATE_FLAG_RUNNING) != 0U) {
+		lv_label_set_text(motor_state_value, "Running");
+	} else if ((flags & APP_MOTOR_STATE_FLAG_READY) != 0U) {
+		lv_label_set_text(motor_state_value, "Ready");
+	} else {
+		lv_label_set_text(motor_state_value, "Disabled");
+	}
+	lv_label_set_text_fmt(motor_applied_value, "%u %%",
+			(unsigned int)(motor_state.words[APP_MOTOR_STATE_APPLIED_DUTY_PERMILLE] / 10U));
+	lv_label_set_text_fmt(motor_target_value, "%u %%",
+			(unsigned int)(motor_state.words[APP_MOTOR_STATE_TARGET_DUTY_PERMILLE] / 10U));
+	lv_label_set_text(motor_direction_value,
+			  motor_state.words[APP_MOTOR_STATE_DIRECTION] != 0U ? "Reverse" : "Forward");
+	lv_label_set_text_fmt(motor_fault_value, "%u",
+			(unsigned int)motor_state.words[APP_MOTOR_STATE_FAULT_CODE]);
+	if ((flags & APP_MOTOR_STATE_FLAG_REMOTE_STOP_LATCH) != 0U) {
+		lv_label_set_text(motor_safety_value, "STOP latched");
+	} else if ((flags & APP_MOTOR_STATE_FLAG_REMOTE_TIMEOUT) != 0U) {
+		lv_label_set_text(motor_safety_value, "Remote timeout");
+	} else if (motor_state.stale) {
+		lv_label_set_text(motor_safety_value, "Cache stale");
+	} else {
+		lv_label_set_text(motor_safety_value, "OK");
 	}
 }
 
