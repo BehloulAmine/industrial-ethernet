@@ -98,12 +98,13 @@ int main(void)
 		uint16_t requested_duty;
 		uint32_t events = app_motor_buttons_poll();
 		int ret = app_motor_potentiometer_poll(&requested_duty);
+		app_ipc_process();
 
 		if (ret < 0)
 		{
 			app_motor_fail(ret);
 		}
-		else
+		else if (!app_ipc_is_remote_mode())
 		{
 			(void)app_motor_set_target_duty(requested_duty);
 		}
@@ -111,13 +112,15 @@ int main(void)
 		/* STOP has absolute priority if several buttons are pressed together. */
 		if ((events & APP_BUTTON_EVENT_STOP) != 0U)
 		{
+			app_ipc_latch_remote_stop();
 			(void)app_motor_stop();
 		}
 		else if ((events & APP_BUTTON_EVENT_RESET) != 0U)
 		{
+			app_ipc_clear_remote_stop();
 			(void)app_motor_reset();
 		}
-		else
+		else if (!app_ipc_is_remote_mode())
 		{
 			if ((events & APP_BUTTON_EVENT_DIRECTION) != 0U)
 			{
@@ -131,7 +134,6 @@ int main(void)
 		}
 
 		(void)app_motor_process(MOTOR_LOOP_PERIOD_MS);
-		app_ipc_process();
 		app_ipc_publish_motor_state(app_motor_buttons_get_state(),
 							app_motor_potentiometer_get_raw(),
 							MOTOR_LOOP_PERIOD_MS);

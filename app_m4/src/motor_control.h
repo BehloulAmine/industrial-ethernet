@@ -23,8 +23,13 @@ int app_motor_init(void);
 int app_motor_start(void);
 int app_motor_stop(void);
 int app_motor_toggle_direction(void);
+int app_motor_set_direction(enum app_motor_direction direction);
 int app_motor_reset(void);
+int app_motor_quick_stop(void);
 int app_motor_set_target_duty(uint16_t duty_permille);
+int app_motor_set_ramps(uint16_t accel_permille_per_second,
+			uint16_t decel_permille_per_second);
+void app_motor_restore_default_ramps(void);
 int app_motor_process(uint32_t elapsed_ms);
 void app_motor_fail(int error);
 

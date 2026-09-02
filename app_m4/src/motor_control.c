@@ -25,6 +25,10 @@ static uint16_t motor_duty_permille;
 static uint16_t motor_target_duty_permille = APP_MOTOR_DUTY_MIN_PERMILLE;
 static uint32_t motor_boost_remaining_ms;
 static int motor_last_error;
+static uint16_t motor_run_ramp_permille_per_second =
+	MOTOR_RUN_RAMP_PERMILLE_PER_SECOND;
+static uint16_t motor_stop_ramp_permille_per_second =
+	MOTOR_STOP_RAMP_PERMILLE_PER_SECOND;
 
 static int motor_make_safe(void)
 {
@@ -219,6 +223,25 @@ int app_motor_toggle_direction(void)
 	return 0;
 }
 
+int app_motor_set_direction(enum app_motor_direction direction)
+{
+	if ((direction != APP_MOTOR_DIRECTION_FORWARD) &&
+	    (direction != APP_MOTOR_DIRECTION_REVERSE)) {
+		return -EINVAL;
+	}
+
+	if (motor_state == APP_MOTOR_STATE_FAULT) {
+		return -EIO;
+	}
+
+	if (motor_state != APP_MOTOR_STATE_READY) {
+		return -EBUSY;
+	}
+
+	motor_direction = direction;
+	return 0;
+}
+
 int app_motor_reset(void)
 {
 	int ret = motor_make_safe();
@@ -234,6 +257,24 @@ int app_motor_reset(void)
 	return 0;
 }
 
+int app_motor_quick_stop(void)
+{
+	int ret;
+
+	if (motor_state == APP_MOTOR_STATE_FAULT) {
+		return -EIO;
+	}
+
+	ret = motor_make_safe();
+	if (ret < 0) {
+		motor_record_fault(ret);
+		return ret;
+	}
+
+	motor_state = APP_MOTOR_STATE_READY;
+	return 0;
+}
+
 int app_motor_set_target_duty(uint16_t duty_permille)
 {
 	if ((duty_permille < APP_MOTOR_DUTY_MIN_PERMILLE) ||
@@ -243,6 +284,25 @@ int app_motor_set_target_duty(uint16_t duty_permille)
 
 	motor_target_duty_permille = duty_permille;
 	return 0;
+}
+
+int app_motor_set_ramps(uint16_t accel_permille_per_second,
+			uint16_t decel_permille_per_second)
+{
+	if ((accel_permille_per_second == 0U) ||
+	    (decel_permille_per_second == 0U)) {
+		return -EINVAL;
+	}
+
+	motor_run_ramp_permille_per_second = accel_permille_per_second;
+	motor_stop_ramp_permille_per_second = decel_permille_per_second;
+	return 0;
+}
+
+void app_motor_restore_default_ramps(void)
+{
+	motor_run_ramp_permille_per_second = MOTOR_RUN_RAMP_PERMILLE_PER_SECOND;
+	motor_stop_ramp_permille_per_second = MOTOR_STOP_RAMP_PERMILLE_PER_SECOND;
 }
 
 int app_motor_process(uint32_t elapsed_ms)
@@ -260,13 +320,13 @@ int app_motor_process(uint32_t elapsed_ms)
 			return 0;
 		}
 
-		step = motor_ramp_step(MOTOR_RUN_RAMP_PERMILLE_PER_SECOND,
+		step = motor_ramp_step(motor_run_ramp_permille_per_second,
 					     elapsed_ms);
 		return motor_ramp_towards(motor_target_duty_permille, step);
 	}
 
 	if (motor_state == APP_MOTOR_STATE_STOPPING) {
-		step = motor_ramp_step(MOTOR_STOP_RAMP_PERMILLE_PER_SECOND,
+		step = motor_ramp_step(motor_stop_ramp_permille_per_second,
 					     elapsed_ms);
 		ret = motor_ramp_towards(0U, step);
 		if (ret < 0) {
