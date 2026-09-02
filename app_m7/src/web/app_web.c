@@ -19,6 +19,7 @@
 
 #include "app_modbus_scanner.h"
 #include "app_modbus_tcp.h"
+#include "app_ipc.h"
 #include "app_dpws.h"
 #include "app_web.h"
 #include "app_web_assets.h"
@@ -198,31 +199,28 @@ static int json_register(char *json, size_t json_len, uint16_t id)
 			(unsigned int)id, (unsigned int)value);
 }
 
-static int json_scanner(char *json, size_t json_len)
+static int json_scanner_image(char *json, size_t json_len, bool input)
 {
-	uint16_t mapping[APP_MODBUS_SCANNER_REG_COUNT];
-	uint16_t values[APP_MODBUS_SCANNER_REG_COUNT];
+	uint16_t map_base = input ? APP_MB_HREG_SCANNER_INPUT_MAP_BASE :
+		APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE;
+	uint16_t count = input ? APP_MODBUS_SCANNER_INPUT_REG_COUNT :
+		APP_MODBUS_SCANNER_OUTPUT_REG_COUNT;
 	size_t off = 0U;
 	int ret;
 
-	for (uint16_t i = 0; i < APP_MODBUS_SCANNER_REG_COUNT; i++) {
-		(void)app_modbus_tcp_holding_read(APP_MB_HREG_SCANNER_MAP_BASE + i,
-						  &mapping[i]);
-		if (app_modbus_scanner_holding_reg_rd(i, &values[i]) < 0) {
-			values[i] = 0U;
-		}
-	}
-
 	ret = snprintk(json, json_len, "{\"count\":%u,\"mapping\":[",
-		       (unsigned int)APP_MODBUS_SCANNER_REG_COUNT);
+		       (unsigned int)count);
 	if (ret < 0 || ret >= json_len) {
 		return -EMSGSIZE;
 	}
 	off = (size_t)ret;
 
-	for (uint16_t i = 0; i < APP_MODBUS_SCANNER_REG_COUNT; i++) {
+	for (uint16_t i = 0; i < count; i++) {
+		uint16_t mapping = 0U;
+
+		(void)app_modbus_tcp_holding_read(map_base + i, &mapping);
 		ret = snprintk(&json[off], json_len - off, "%s%u",
-			       i == 0U ? "" : ",", (unsigned int)mapping[i]);
+			       i == 0U ? "" : ",", (unsigned int)mapping);
 		if (ret < 0 || ret >= json_len - off) {
 			return -EMSGSIZE;
 		}
@@ -235,9 +233,15 @@ static int json_scanner(char *json, size_t json_len)
 	}
 	off += (size_t)ret;
 
-	for (uint16_t i = 0; i < APP_MODBUS_SCANNER_REG_COUNT; i++) {
+	for (uint16_t i = 0; i < count; i++) {
+		uint16_t value = 0U;
+
+		if ((input ? app_modbus_scanner_input_reg_rd(i, &value) :
+		     app_modbus_scanner_output_reg_rd(i, &value)) < 0) {
+			value = 0U;
+		}
 		ret = snprintk(&json[off], json_len - off, "%s%u",
-			       i == 0U ? "" : ",", (unsigned int)values[i]);
+			       i == 0U ? "" : ",", (unsigned int)value);
 		if (ret < 0 || ret >= json_len - off) {
 			return -EMSGSIZE;
 		}
@@ -252,29 +256,64 @@ static int json_scanner(char *json, size_t json_len)
 	return (int)(off + (size_t)ret);
 }
 
-static int json_scanner_slot(char *json, size_t json_len, uint16_t id)
+static int json_scanner(char *json, size_t json_len)
 {
-	uint16_t value;
-	uint16_t mapping;
+	size_t off;
 	int ret;
 
-	if (id >= APP_MODBUS_SCANNER_REG_COUNT) {
-		return -EINVAL;
+	ret = snprintk(json, json_len, "{\"input\":");
+	if (ret < 0 || ret >= json_len) {
+		return -EMSGSIZE;
+	}
+	off = (size_t)ret;
+	ret = json_scanner_image(&json[off], json_len - off, true);
+	if (ret < 0 || ret >= json_len - off) {
+		return -EMSGSIZE;
+	}
+	off += (size_t)ret;
+	ret = snprintk(&json[off], json_len - off, ",\"output\":");
+	if (ret < 0 || ret >= json_len - off) {
+		return -EMSGSIZE;
+	}
+	off += (size_t)ret;
+	ret = json_scanner_image(&json[off], json_len - off, false);
+	if (ret < 0 || ret >= json_len - off) {
+		return -EMSGSIZE;
+	}
+	off += (size_t)ret;
+	ret = snprintk(&json[off], json_len - off, "}");
+	if (ret < 0 || ret >= json_len - off) {
+		return -EMSGSIZE;
 	}
 
-	ret = app_modbus_scanner_holding_reg_rd(id, &value);
-	if (ret < 0) {
-		return ret;
-	}
+	return (int)(off + (size_t)ret);
+}
 
-	ret = app_modbus_tcp_holding_read(APP_MB_HREG_SCANNER_MAP_BASE + id, &mapping);
-	if (ret < 0) {
-		return ret;
+static int json_motor_state(char *json, size_t json_len)
+{
+	struct app_ipc_motor_state state;
+
+	app_ipc_get_motor_state(&state);
+	if (!state.valid) {
+		return snprintk(json, json_len, "{\"available\":false}");
 	}
 
 	return snprintk(json, json_len,
-			"{\"id\":%u,\"value\":%u,\"mapping\":%u}",
-			(unsigned int)id, (unsigned int)value, (unsigned int)mapping);
+			"{\"available\":true,\"stale\":%s,\"flags\":%u,"
+			"\"applied\":%u,\"target\":%u,\"direction\":%u,"
+			"\"fault\":%u,\"buttons\":%u,\"potentiometer\":%u,"
+			"\"command_age_ms\":%u,\"heartbeat\":%u,\"sequence\":%u}",
+			state.stale ? "true" : "false",
+			(unsigned int)state.words[APP_MOTOR_STATE_FLAGS],
+			(unsigned int)state.words[APP_MOTOR_STATE_APPLIED_DUTY_PERMILLE],
+			(unsigned int)state.words[APP_MOTOR_STATE_TARGET_DUTY_PERMILLE],
+			(unsigned int)state.words[APP_MOTOR_STATE_DIRECTION],
+			(unsigned int)state.words[APP_MOTOR_STATE_FAULT_CODE],
+			(unsigned int)state.words[APP_MOTOR_STATE_BUTTONS],
+			(unsigned int)state.words[APP_MOTOR_STATE_POTENTIOMETER_RAW],
+			(unsigned int)state.words[APP_MOTOR_STATE_COMMAND_AGE_MS],
+			(unsigned int)state.words[APP_MOTOR_STATE_HEARTBEAT],
+			(unsigned int)state.words[APP_MOTOR_STATE_LAST_ACCEPTED_SEQUENCE]);
 }
 
 static int parse_value(const char *body, uint16_t *value)
@@ -303,6 +342,108 @@ static int parse_value(const char *body, uint16_t *value)
 
 	*value = (uint16_t)parsed;
 	return 0;
+}
+
+static int parse_named_value(const char *body, const char *name, uint16_t *value)
+{
+	char key[32];
+	const char *cursor;
+	char *end;
+	unsigned long parsed;
+	int len;
+
+	if (!body || !name || !value) {
+		return -EINVAL;
+	}
+
+	len = snprintk(key, sizeof(key), "\"%s\"", name);
+	if (len < 0 || len >= sizeof(key)) {
+		return -EINVAL;
+	}
+
+	cursor = strstr(body, key);
+	if (!cursor) {
+		return -ENOENT;
+	}
+	cursor = strchr(cursor + len, ':');
+	if (!cursor) {
+		return -EINVAL;
+	}
+	cursor++;
+	while (*cursor == ' ' || *cursor == '\t') {
+		cursor++;
+	}
+
+	parsed = strtoul(cursor, &end, 10);
+	if (end == cursor || parsed > UINT16_MAX) {
+		return -EINVAL;
+	}
+
+	*value = (uint16_t)parsed;
+	return 0;
+}
+
+static int apply_motor_command(const char *body)
+{
+	static const struct {
+		const char *name;
+		uint16_t reg;
+	} optional_fields[] = {
+		{ "duty", APP_MB_HREG_MOTOR_TARGET_DUTY },
+		{ "accel", APP_MB_HREG_MOTOR_ACCEL_RAMP },
+		{ "decel", APP_MB_HREG_MOTOR_DECEL_RAMP },
+		{ "timeout", APP_MB_HREG_MOTOR_TIMEOUT },
+	};
+	uint16_t value;
+	int ret;
+
+	ret = parse_named_value(body, "control", &value);
+	if (ret < 0) {
+		return ret;
+	}
+	ret = app_modbus_tcp_holding_write(APP_MB_HREG_MOTOR_CONTROL, value);
+	if (ret < 0) {
+		return ret;
+	}
+
+	for (size_t i = 0U; i < ARRAY_SIZE(optional_fields); i++) {
+		ret = parse_named_value(body, optional_fields[i].name, &value);
+		if (ret == -ENOENT) {
+			continue;
+		}
+		if (ret < 0) {
+			return ret;
+		}
+		ret = app_modbus_tcp_holding_write(optional_fields[i].reg, value);
+		if (ret < 0) {
+			return ret;
+		}
+	}
+
+	ret = app_modbus_tcp_motor_set_mode(true);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return app_modbus_tcp_holding_write(APP_MB_HREG_MOTOR_APPLY,
+					   APP_MB_MOTOR_APPLY_COMMAND);
+}
+
+static int apply_motor_local(void)
+{
+	int ret;
+
+	ret = app_modbus_tcp_holding_write(APP_MB_HREG_MOTOR_CONTROL, 0U);
+	if (ret < 0) {
+		return ret;
+	}
+	ret = app_modbus_tcp_motor_set_mode(false);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return app_modbus_tcp_holding_write(APP_MB_HREG_MOTOR_APPLY,
+					   APP_MB_MOTOR_APPLY_COMMAND);
 }
 
 static int parse_id_after_prefix(const char *path, const char *prefix, uint16_t *id)
@@ -377,8 +518,12 @@ static int handle_api_get(int client, const char *path)
 		len = json_register(json, sizeof(json), id);
 	} else if (strcmp(path, "/api/scanner") == 0) {
 		len = json_scanner(json, sizeof(json));
-	} else if (parse_id_after_prefix(path, "/api/scanner/", &id) == 0) {
-		len = json_scanner_slot(json, sizeof(json), id);
+	} else if (strcmp(path, "/api/scanner/input") == 0) {
+		len = json_scanner_image(json, sizeof(json), true);
+	} else if (strcmp(path, "/api/scanner/output") == 0) {
+		len = json_scanner_image(json, sizeof(json), false);
+	} else if (strcmp(path, "/api/motor/state") == 0) {
+		len = json_motor_state(json, sizeof(json));
 	} else {
 		return send_not_found(client);
 	}
@@ -404,8 +549,20 @@ static int handle_api_put(int client, const char *path, const char *body)
 
 	if (parse_id_after_prefix(path, "/api/registers/", &id) == 0) {
 		ret = app_modbus_tcp_holding_write(id, value);
-	} else if (parse_id_after_prefix(path, "/api/scanner/", &id) == 0) {
-		ret = app_modbus_scanner_holding_reg_wr(id, value);
+	} else if (parse_id_after_prefix(path, "/api/scanner/output/", &id) == 0) {
+		ret = app_modbus_scanner_output_reg_wr(id, value);
+	} else if (parse_id_after_prefix(path, "/api/scanner/input-mapping/", &id) == 0) {
+		if (id >= APP_MODBUS_SCANNER_INPUT_REG_COUNT) {
+			return send_bad_request(client);
+		}
+		ret = app_modbus_tcp_holding_write(APP_MB_HREG_SCANNER_INPUT_MAP_BASE + id,
+						  value);
+	} else if (parse_id_after_prefix(path, "/api/scanner/output-mapping/", &id) == 0) {
+		if (id >= APP_MODBUS_SCANNER_OUTPUT_REG_COUNT) {
+			return send_bad_request(client);
+		}
+		ret = app_modbus_tcp_holding_write(APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE + id,
+						  value);
 	} else {
 		return send_not_found(client);
 	}
@@ -417,7 +574,7 @@ static int handle_api_put(int client, const char *path, const char *body)
 	return send_response(client, 200, "OK", "application/json", "{\"ok\":true}");
 }
 
-static int handle_api_post(int client, const char *path)
+static int handle_api_post(int client, const char *path, const char *body)
 {
 	int ret;
 
@@ -437,6 +594,26 @@ static int handle_api_post(int client, const char *path)
 			(void)k_work_reschedule(&reboot_work, K_MSEC(500));
 		}
 		return ret;
+	}
+
+	if (strcmp(path, "/api/motor/command") == 0) {
+		ret = apply_motor_command(body);
+		if (ret < 0) {
+			return send_bad_request(client);
+		}
+
+		return send_response(client, 202, "Accepted", "application/json",
+				     "{\"queued\":true}");
+	}
+
+	if (strcmp(path, "/api/motor/local") == 0) {
+		ret = apply_motor_local();
+		if (ret < 0) {
+			return send_bad_request(client);
+		}
+
+		return send_response(client, 202, "Accepted", "application/json",
+				     "{\"queued\":true}");
 	}
 
 	return send_not_found(client);
@@ -495,7 +672,7 @@ static int handle_http_request(int client, char *req)
 						  "application/soap+xml; charset=utf-8",
 						  dpws_metadata_xml, (size_t)len);
 		}
-		return handle_api_post(client, path);
+		return handle_api_post(client, path, body);
 	}
 
 	if (strcmp(method, "PUT") == 0) {

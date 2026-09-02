@@ -17,6 +17,7 @@ void app_modbus_scanner_init(app_modbus_scanner_reg_rd_t reg_rd,
 int app_modbus_scanner_holding_reg_rd(uint16_t addr, uint16_t *reg);
 int app_modbus_scanner_holding_reg_wr(uint16_t addr, uint16_t reg);
 int app_modbus_scanner_input_reg_rd(uint16_t addr, uint16_t *reg);
+int app_modbus_scanner_output_reg_rd(uint16_t addr, uint16_t *reg);
 int app_modbus_scanner_output_reg_wr(uint16_t addr, uint16_t reg);
 
 #endif /* APP_MODBUS_SCANNER_H_ */

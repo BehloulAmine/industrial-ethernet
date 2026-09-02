@@ -99,6 +99,39 @@ int app_modbus_scanner_input_reg_rd(uint16_t addr, uint16_t *reg)
 	return ret;
 }
 
+int app_modbus_scanner_output_reg_rd(uint16_t addr, uint16_t *reg)
+{
+	uint16_t holding_addr;
+	int ret;
+
+	if (!reg) {
+		return -EINVAL;
+	}
+
+	if (addr >= APP_MODBUS_SCANNER_OUTPUT_REG_COUNT) {
+		update_access_diag(addr, false, -ENOTSUP);
+		return -ENOTSUP;
+	}
+
+	ret = scanner_map_rd(APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE, addr, &holding_addr);
+	if (ret < 0) {
+		update_access_diag(addr, false, ret);
+		return ret;
+	}
+
+	if (holding_addr == APP_MB_SCAN_MAP_FREE) {
+		k_mutex_lock(&scanner_local_regs_lock, K_FOREVER);
+		*reg = output_local_regs[addr];
+		k_mutex_unlock(&scanner_local_regs_lock);
+		update_access_diag(addr, false, 0);
+		return 0;
+	}
+
+	ret = unit1_reg_rd ? unit1_reg_rd(holding_addr, reg) : -ENODEV;
+	update_access_diag(addr, false, ret);
+	return ret;
+}
+
 int app_modbus_scanner_output_reg_wr(uint16_t addr, uint16_t reg)
 {
 	uint16_t holding_addr;

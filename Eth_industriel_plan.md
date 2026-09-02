@@ -583,9 +583,11 @@ EtherNet/IP, Web et LCD. Une lecture cyclique externe ne déclenche donc pas une
 - EtherNet/IP : réduire les assemblies à cinq mots et les relier directement aux deux scanners :
   Assembly 100 = Output scanner (commande PLC), Assembly 101 = Input scanner (état PLC).
   Conserver l'ordre little-endian CIP et les droits directionnels identiques à Modbus.
-- Web/REST : ajouter `/api/motor/state` et `/api/motor/command`, une vue moteur avec source,
-  consigne, PWM appliqué, direction, défaut et âge du cache. Une écriture répond que la commande a
-  été mise en file ; l'état et la séquence acquittée confirment ensuite son application par le M4.
+- Web/REST : exposer séparément les images scanner Input et Output, leurs mappings et les routes
+  d'écriture Output. Ajouter `/api/motor/state`, `/api/motor/command` et `/api/motor/local` ; la
+  vue moteur affiche le mode local/distant, l'état, consigne, PWM appliqué, direction, défaut et
+  âge du cache. Une commande force le mode distant, déclenche `APPLY` et répond qu'elle a été mise
+  en file ; l'état et la séquence acquittée confirment ensuite son application par le M4.
 - LCD M7 : afficher une synthèse lecture seule du cache ; n'exposer que les commandes autorisées
   par l'arbitrage courant.
 - Shell M7 : ajouter `m4 status` puis `m4 threads`. La seconde commande demande un snapshot au M4
