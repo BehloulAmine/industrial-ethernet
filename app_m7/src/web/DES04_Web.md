@@ -62,7 +62,7 @@ asset doit tenir compte de la consommation flash.
 | Méthode | Route | Effet |
 |---|---|---|
 | GET | `/api/status` | réseau actif, lien, connexions Modbus, heartbeat, statut |
-| GET | `/api/registers` | les 50 holding registers |
+| GET | `/api/registers` | les 60 holding registers |
 | GET | `/api/registers/<id>` | un holding register |
 | PUT | `/api/registers/<id>` | écrit une valeur 16 bits |
 | GET | `/api/scanner` | mapping et valeurs des dix slots |

@@ -41,16 +41,21 @@ static atomic_t next_command_sequence;
 
 struct app_remote_command {
 	bool enabled;
+	bool remote;
 	uint16_t control;
 	uint16_t duty_permille;
 	uint16_t accel_ramp;
 	uint16_t decel_ramp;
+	uint16_t timeout_ms;
+	uint16_t source;
 };
 
 static struct app_remote_command remote_command = {
 	.duty_permille = APP_MOTOR_COMMAND_DUTY_MIN_PERMILLE,
 	.accel_ramp = 1000U,
 	.decel_ramp = 4000U,
+	.timeout_ms = APP_IPC_REMOTE_TIMEOUT_MS,
+	.source = APP_MOTOR_COMMAND_SOURCE_SHELL,
 };
 static void remote_refresh_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(remote_refresh_work, remote_refresh_work_handler);
@@ -274,9 +279,9 @@ static int send_remote_command_locked(bool remote)
 		sys_cpu_to_le16(remote_command.decel_ramp);
 	message.words_le[APP_MOTOR_COMMAND_MODE] = sys_cpu_to_le16(
 		remote ? APP_MOTOR_COMMAND_MODE_REMOTE |
-			 APP_MOTOR_COMMAND_MODE_SOURCE(APP_MOTOR_COMMAND_SOURCE_SHELL) : 0U);
+			 APP_MOTOR_COMMAND_MODE_SOURCE(remote_command.source) : 0U);
 	message.words_le[APP_MOTOR_COMMAND_TIMEOUT_MS] =
-		sys_cpu_to_le16(APP_IPC_REMOTE_TIMEOUT_MS);
+		sys_cpu_to_le16(remote_command.timeout_ms);
 	message.words_le[APP_MOTOR_COMMAND_SEQUENCE] =
 		sys_cpu_to_le16((uint16_t)sequence);
 
@@ -317,6 +322,45 @@ static void remote_refresh_work_handler(struct k_work *work)
 	k_mutex_unlock(&remote_command_lock);
 }
 
+int app_ipc_motor_submit(const struct app_ipc_motor_command *command)
+{
+	int ret;
+
+	if ((command == NULL) ||
+	    ((command->source != APP_MOTOR_COMMAND_SOURCE_SHELL) &&
+	     (command->source != APP_MOTOR_COMMAND_SOURCE_MODBUS)) ||
+	    (command->duty_permille < APP_MOTOR_COMMAND_DUTY_MIN_PERMILLE) ||
+	    (command->duty_permille > APP_MOTOR_COMMAND_DUTY_MAX_PERMILLE) ||
+	    (command->accel_ramp < APP_MOTOR_COMMAND_ACCEL_MIN_PERMILLE_PER_SECOND) ||
+	    (command->accel_ramp > APP_MOTOR_COMMAND_ACCEL_MAX_PERMILLE_PER_SECOND) ||
+	    (command->decel_ramp < APP_MOTOR_COMMAND_ACCEL_MIN_PERMILLE_PER_SECOND) ||
+	    (command->decel_ramp > APP_MOTOR_COMMAND_ACCEL_MAX_PERMILLE_PER_SECOND) ||
+	    (command->timeout_ms < APP_MOTOR_COMMAND_TIMEOUT_MIN_MS) ||
+	    (command->timeout_ms > APP_MOTOR_COMMAND_TIMEOUT_MAX_MS)) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&remote_command_lock, K_FOREVER);
+	remote_command.control = command->control;
+	remote_command.duty_permille = command->duty_permille;
+	remote_command.accel_ramp = command->accel_ramp;
+	remote_command.decel_ramp = command->decel_ramp;
+	remote_command.timeout_ms = command->timeout_ms;
+	remote_command.source = command->source;
+	remote_command.remote = command->remote;
+	remote_command.enabled = command->remote;
+	ret = send_remote_command_locked(command->remote);
+	if ((ret >= 0) && command->remote) {
+		(void)k_work_reschedule(&remote_refresh_work,
+					K_MSEC(APP_IPC_REMOTE_REFRESH_MS));
+	} else if ((ret >= 0) && !command->remote) {
+		(void)k_work_cancel_delayable(&remote_refresh_work);
+	}
+	k_mutex_unlock(&remote_command_lock);
+
+	return ret;
+}
+
 static int remote_command_update(bool activate_remote, uint16_t control,
 				 uint16_t duty_permille)
 {
@@ -329,8 +373,11 @@ static int remote_command_update(bool activate_remote, uint16_t control,
 	}
 
 	remote_command.enabled = true;
+	remote_command.remote = true;
 	remote_command.control = control;
 	remote_command.duty_permille = duty_permille;
+	remote_command.timeout_ms = APP_IPC_REMOTE_TIMEOUT_MS;
+	remote_command.source = APP_MOTOR_COMMAND_SOURCE_SHELL;
 	ret = send_remote_command_locked(true);
 	if (ret >= 0) {
 		(void)k_work_reschedule(&remote_refresh_work,
@@ -345,6 +392,8 @@ static int remote_command_disable(void)
 	int ret;
 
 	k_mutex_lock(&remote_command_lock, K_FOREVER);
+	remote_command.source = APP_MOTOR_COMMAND_SOURCE_SHELL;
+	remote_command.timeout_ms = APP_IPC_REMOTE_TIMEOUT_MS;
 	ret = send_remote_command_locked(false);
 	if (ret >= 0) {
 		remote_command.enabled = false;
@@ -360,6 +409,8 @@ static int remote_command_reset(void)
 	int ret;
 
 	k_mutex_lock(&remote_command_lock, K_FOREVER);
+	remote_command.source = APP_MOTOR_COMMAND_SOURCE_SHELL;
+	remote_command.timeout_ms = APP_IPC_REMOTE_TIMEOUT_MS;
 	remote_command.control = APP_MOTOR_COMMAND_ENABLE |
 		APP_MOTOR_COMMAND_RESET_FAULT;
 	ret = send_remote_command_locked(remote_command.enabled);

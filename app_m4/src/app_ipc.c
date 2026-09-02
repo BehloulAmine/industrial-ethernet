@@ -102,7 +102,9 @@ static bool command_is_valid(const struct app_motor_command_message *message,
 	       (sequence == (uint16_t)sys_le32_to_cpu(frame->sequence_le)) &&
 	       ((mode == 0U) ||
 		(mode == (APP_MOTOR_COMMAND_MODE_REMOTE |
-			 APP_MOTOR_COMMAND_MODE_SOURCE(APP_MOTOR_COMMAND_SOURCE_SHELL))));
+			 APP_MOTOR_COMMAND_MODE_SOURCE(APP_MOTOR_COMMAND_SOURCE_SHELL))) ||
+		(mode == (APP_MOTOR_COMMAND_MODE_REMOTE |
+			 APP_MOTOR_COMMAND_MODE_SOURCE(APP_MOTOR_COMMAND_SOURCE_MODBUS))));
 }
 
 static void endpoint_bound_callback(void *priv)

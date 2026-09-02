@@ -17,6 +17,7 @@
 
 #include "app_modbus_scanner.h"
 #include "app_modbus_tcp.h"
+#include "app_ipc.h"
 #include "modbus_map.h"
 #include "net_cfg.h"
 
@@ -38,6 +39,10 @@ LOG_MODULE_REGISTER(app_modbus_tcp, LOG_LEVEL_INF);
 static uint16_t holding_regs[APP_MODBUS_HOLDING_REG_COUNT] = {
 	[APP_MB_HREG_SIGNATURE] = APP_MODBUS_MAP_SIGNATURE,
 	[APP_MB_HREG_MODE] = 1,
+	[APP_MB_HREG_MOTOR_TARGET_DUTY] = APP_MOTOR_COMMAND_DUTY_MIN_PERMILLE,
+	[APP_MB_HREG_MOTOR_ACCEL_RAMP] = 1000U,
+	[APP_MB_HREG_MOTOR_DECEL_RAMP] = 4000U,
+	[APP_MB_HREG_MOTOR_TIMEOUT] = 1000U,
 };
 
 static struct modbus_adu tcp_adu;
@@ -124,8 +129,57 @@ static void init_scanner_mapping_defaults(void)
 {
 	for (uint16_t i = 0; i < APP_MB_HREG_SCANNER_MAP_COUNT; i++) {
 		holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + i] =
-			APP_MB_HREG_USER_DATA_BASE + i;
+			APP_MB_HREG_SCANNER_DATA_BASE + i;
 	}
+}
+
+static bool is_motor_command_addr(uint16_t addr)
+{
+	return addr >= APP_MB_HREG_MOTOR_MODE &&
+	       addr <= APP_MB_HREG_MOTOR_TIMEOUT;
+}
+
+static bool is_motor_state_addr(uint16_t addr)
+{
+	return addr >= APP_MB_HREG_MOTOR_STATE_BASE &&
+	       addr < APP_MB_HREG_MOTOR_STATE_BASE + APP_MB_HREG_MOTOR_STATE_COUNT;
+}
+
+static int motor_state_reg_read(uint16_t addr, uint16_t *reg)
+{
+	struct app_ipc_motor_state state;
+
+	app_ipc_get_motor_state(&state);
+	if (!state.valid) {
+		return -EAGAIN;
+	}
+
+	*reg = state.words[addr - APP_MB_HREG_MOTOR_STATE_BASE];
+	return 0;
+}
+
+static int motor_command_apply(void)
+{
+	struct app_ipc_motor_command command;
+	int ret;
+
+	command.control = holding_regs[APP_MB_HREG_MOTOR_CONTROL];
+	command.duty_permille = holding_regs[APP_MB_HREG_MOTOR_TARGET_DUTY];
+	command.accel_ramp = holding_regs[APP_MB_HREG_MOTOR_ACCEL_RAMP];
+	command.decel_ramp = holding_regs[APP_MB_HREG_MOTOR_DECEL_RAMP];
+	command.timeout_ms = holding_regs[APP_MB_HREG_MOTOR_TIMEOUT];
+	command.source = APP_MOTOR_COMMAND_SOURCE_MODBUS;
+	command.remote = holding_regs[APP_MB_HREG_MOTOR_MODE] == APP_MB_MOTOR_MODE_REMOTE;
+
+	ret = app_ipc_motor_submit(&command);
+	if (ret >= 0) {
+		holding_regs[APP_MB_HREG_MOTOR_COMMAND_STATUS] = 0U;
+		holding_regs[APP_MB_HREG_MOTOR_COMMAND_SEQUENCE]++;
+		return 0;
+	}
+
+	holding_regs[APP_MB_HREG_MOTOR_COMMAND_STATUS] = (uint16_t)ret;
+	return ret;
 }
 
 static bool is_scanner_mapping_addr(uint16_t addr)
@@ -288,6 +342,10 @@ static int holding_reg_rd(uint16_t addr, uint16_t *reg)
 		return -ENOTSUP;
 	}
 
+	if (is_motor_state_addr(addr)) {
+		return motor_state_reg_read(addr, reg);
+	}
+
 	k_mutex_lock(&holding_regs_lock, K_FOREVER);
 	*reg = holding_regs[addr];
 	k_mutex_unlock(&holding_regs_lock);
@@ -303,8 +361,42 @@ static int holding_reg_wr(uint16_t addr, uint16_t reg)
 		return -ENOTSUP;
 	}
 
+	if (is_motor_state_addr(addr) ||
+	    (addr == APP_MB_HREG_MOTOR_COMMAND_STATUS) ||
+	    (addr == APP_MB_HREG_MOTOR_COMMAND_SEQUENCE) ||
+	    (addr == APP_MB_HREG_MOTOR_RESERVED)) {
+		return -EACCES;
+	}
+
 	if (is_scanner_mapping_addr(addr) && !is_valid_scanner_mapping(reg)) {
 		return -EINVAL;
+	}
+
+	if (is_motor_command_addr(addr)) {
+		if ((addr == APP_MB_HREG_MOTOR_MODE) &&
+		    (reg > APP_MB_MOTOR_MODE_REMOTE)) {
+			return -EINVAL;
+		}
+
+		k_mutex_lock(&holding_regs_lock, K_FOREVER);
+		if (addr == APP_MB_HREG_MOTOR_SAVE) {
+			if (reg != APP_MB_MOTOR_SAVE_COMMAND) {
+				holding_regs[APP_MB_HREG_MOTOR_COMMAND_STATUS] = (uint16_t)-EINVAL;
+				k_mutex_unlock(&holding_regs_lock);
+				return -EINVAL;
+			}
+
+			holding_regs[APP_MB_HREG_MOTOR_COMMAND_STATUS] =
+				APP_MB_MOTOR_STATUS_PENDING;
+			submit_ret = motor_command_apply();
+			holding_regs[APP_MB_HREG_MOTOR_SAVE] = 0U;
+			k_mutex_unlock(&holding_regs_lock);
+			return submit_ret;
+		}
+
+		holding_regs[addr] = reg;
+		k_mutex_unlock(&holding_regs_lock);
+		return 0;
 	}
 
 	k_mutex_lock(&holding_regs_lock, K_FOREVER);
