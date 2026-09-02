@@ -127,9 +127,21 @@ static void sync_holding_regs_from_saved_cfg(void)
 
 static void init_scanner_mapping_defaults(void)
 {
-	for (uint16_t i = 0; i < APP_MB_HREG_SCANNER_MAP_COUNT; i++) {
-		holding_regs[APP_MB_HREG_SCANNER_MAP_BASE + i] =
-			APP_MB_HREG_SCANNER_DATA_BASE + i;
+	holding_regs[APP_MB_HREG_SCANNER_INPUT_MAP_BASE] =
+		APP_MB_HREG_MOTOR_STATE_BASE + APP_MOTOR_STATE_FAULT_CODE;
+	holding_regs[APP_MB_HREG_SCANNER_INPUT_MAP_BASE + 1U] =
+		APP_MB_HREG_MOTOR_STATE_BASE + APP_MOTOR_STATE_APPLIED_DUTY_PERMILLE;
+	holding_regs[APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE] = APP_MB_HREG_MOTOR_CONTROL;
+	holding_regs[APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE + 1U] =
+		APP_MB_HREG_MOTOR_TARGET_DUTY;
+	holding_regs[APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE + 2U] = APP_MB_HREG_MOTOR_APPLY;
+
+	for (uint16_t i = 2U; i < APP_MB_HREG_SCANNER_INPUT_MAP_COUNT; i++) {
+		holding_regs[APP_MB_HREG_SCANNER_INPUT_MAP_BASE + i] = APP_MB_SCAN_MAP_FREE;
+	}
+
+	for (uint16_t i = 3U; i < APP_MB_HREG_SCANNER_OUTPUT_MAP_COUNT; i++) {
+		holding_regs[APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE + i] = APP_MB_SCAN_MAP_FREE;
 	}
 }
 
@@ -182,16 +194,33 @@ static int motor_command_apply(void)
 	return ret;
 }
 
-static bool is_scanner_mapping_addr(uint16_t addr)
+static bool is_input_scanner_mapping_addr(uint16_t addr)
 {
-	return addr >= APP_MB_HREG_SCANNER_MAP_BASE &&
-	       addr < APP_MB_HREG_SCANNER_MAP_BASE + APP_MB_HREG_SCANNER_MAP_COUNT;
+	return addr >= APP_MB_HREG_SCANNER_INPUT_MAP_BASE &&
+	       addr < APP_MB_HREG_SCANNER_INPUT_MAP_BASE + APP_MB_HREG_SCANNER_INPUT_MAP_COUNT;
+}
+
+static bool is_output_scanner_mapping_addr(uint16_t addr)
+{
+	return addr >= APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE &&
+	       addr < APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE + APP_MB_HREG_SCANNER_OUTPUT_MAP_COUNT;
 }
 
 static bool is_valid_scanner_mapping(uint16_t holding_addr)
 {
 	return holding_addr == APP_MB_SCAN_MAP_FREE ||
 	       holding_addr < APP_MODBUS_HOLDING_REG_COUNT;
+}
+
+static bool is_writable_output_scanner_mapping(uint16_t holding_addr)
+{
+	return (holding_addr == APP_MB_SCAN_MAP_FREE) ||
+	       (!is_motor_state_addr(holding_addr) &&
+		(holding_addr != APP_MB_HREG_MOTOR_COMMAND_STATUS) &&
+		(holding_addr != APP_MB_HREG_MOTOR_COMMAND_SEQUENCE) &&
+		(holding_addr != APP_MB_HREG_MOTOR_RESERVED) &&
+		!is_input_scanner_mapping_addr(holding_addr) &&
+		!is_output_scanner_mapping_addr(holding_addr));
 }
 
 static int save_holding_regs_config(uint16_t command)
@@ -368,8 +397,14 @@ static int holding_reg_wr(uint16_t addr, uint16_t reg)
 		return -EACCES;
 	}
 
-	if (is_scanner_mapping_addr(addr) && !is_valid_scanner_mapping(reg)) {
+	if ((is_input_scanner_mapping_addr(addr) ||
+	     is_output_scanner_mapping_addr(addr)) && !is_valid_scanner_mapping(reg)) {
 		return -EINVAL;
+	}
+
+	if (is_output_scanner_mapping_addr(addr) &&
+	    !is_writable_output_scanner_mapping(reg)) {
+		return -EACCES;
 	}
 
 	if (is_motor_command_addr(addr)) {
@@ -379,8 +414,8 @@ static int holding_reg_wr(uint16_t addr, uint16_t reg)
 		}
 
 		k_mutex_lock(&holding_regs_lock, K_FOREVER);
-		if (addr == APP_MB_HREG_MOTOR_SAVE) {
-			if (reg != APP_MB_MOTOR_SAVE_COMMAND) {
+		if (addr == APP_MB_HREG_MOTOR_APPLY) {
+			if (reg != APP_MB_MOTOR_APPLY_COMMAND) {
 				holding_regs[APP_MB_HREG_MOTOR_COMMAND_STATUS] = (uint16_t)-EINVAL;
 				k_mutex_unlock(&holding_regs_lock);
 				return -EINVAL;
@@ -389,7 +424,7 @@ static int holding_reg_wr(uint16_t addr, uint16_t reg)
 			holding_regs[APP_MB_HREG_MOTOR_COMMAND_STATUS] =
 				APP_MB_MOTOR_STATUS_PENDING;
 			submit_ret = motor_command_apply();
-			holding_regs[APP_MB_HREG_MOTOR_SAVE] = 0U;
+			holding_regs[APP_MB_HREG_MOTOR_APPLY] = 0U;
 			k_mutex_unlock(&holding_regs_lock);
 			return submit_ret;
 		}
@@ -457,16 +492,25 @@ static int holding_reg_wr(uint16_t addr, uint16_t reg)
 static int routed_holding_reg_rd(uint16_t addr, uint16_t *reg)
 {
 	if (active_request_unit_id == APP_MODBUS_SCANNER_UNIT_ID) {
-		return app_modbus_scanner_holding_reg_rd(addr, reg);
+		return app_modbus_scanner_input_reg_rd(addr, reg);
 	}
 
 	return holding_reg_rd(addr, reg);
 }
 
+static int routed_input_reg_rd(uint16_t addr, uint16_t *reg)
+{
+	if (active_request_unit_id == APP_MODBUS_SCANNER_UNIT_ID) {
+		return app_modbus_scanner_input_reg_rd(addr, reg);
+	}
+
+	return input_reg_rd(addr, reg);
+}
+
 static int routed_holding_reg_wr(uint16_t addr, uint16_t reg)
 {
 	if (active_request_unit_id == APP_MODBUS_SCANNER_UNIT_ID) {
-		return app_modbus_scanner_holding_reg_wr(addr, reg);
+		return app_modbus_scanner_output_reg_wr(addr, reg);
 	}
 
 	return holding_reg_wr(addr, reg);
@@ -540,7 +584,7 @@ MODBUS_CUSTOM_FC_DEFINE(fc23_unit2, fc23_read_write_holding_regs,
 			APP_MODBUS_FC23_READ_WRITE_REGS, NULL);
 
 static struct modbus_user_callbacks server_callbacks = {
-	.input_reg_rd = input_reg_rd,
+	.input_reg_rd = routed_input_reg_rd,
 	.holding_reg_rd = routed_holding_reg_rd,
 	.holding_reg_wr = routed_holding_reg_wr,
 };

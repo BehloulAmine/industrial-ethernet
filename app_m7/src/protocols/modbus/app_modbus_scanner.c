@@ -1,9 +1,9 @@
 /*
- * Modbus Unit-ID 2 scanner window.
+ * Modbus Unit-ID 2 directional scanner window.
  *
- * Unit-ID 1 owns the scanner mapping table at registers[40..49].
- * Unit-ID 2 exposes scanner_regs[0..9] as a dynamic window over the data
- * selected by that mapping table.
+ * Unit-ID 1 owns input and output mapping tables at registers[40..44] and
+ * registers[45..49]. Unit-ID 2 reads the input image and writes the output
+ * image, each containing five dynamic words.
  */
 
 #include <errno.h>
@@ -14,7 +14,9 @@
 #include "app_modbus_scanner.h"
 #include "modbus_map.h"
 
-static uint16_t scanner_local_regs[APP_MODBUS_SCANNER_REG_COUNT];
+static uint16_t input_local_regs[APP_MODBUS_SCANNER_INPUT_REG_COUNT];
+static uint16_t output_local_regs[APP_MODBUS_SCANNER_OUTPUT_REG_COUNT];
+static uint16_t legacy_local_regs[APP_MODBUS_SCANNER_REG_COUNT];
 static K_MUTEX_DEFINE(scanner_local_regs_lock);
 
 static app_modbus_scanner_reg_rd_t unit1_reg_rd;
@@ -46,13 +48,14 @@ static void update_access_diag(uint16_t addr, bool write, int err)
 	}
 }
 
-static int scanner_map_rd(uint16_t scanner_addr, uint16_t *holding_addr)
+static int scanner_map_rd(uint16_t map_base, uint16_t scanner_addr,
+			  uint16_t *holding_addr)
 {
 	if (!unit1_reg_rd) {
 		return -ENODEV;
 	}
 
-	return unit1_reg_rd(APP_MB_HREG_SCANNER_MAP_BASE + scanner_addr, holding_addr);
+	return unit1_reg_rd(map_base + scanner_addr, holding_addr);
 }
 
 void app_modbus_scanner_init(app_modbus_scanner_reg_rd_t reg_rd,
@@ -62,7 +65,7 @@ void app_modbus_scanner_init(app_modbus_scanner_reg_rd_t reg_rd,
 	unit1_reg_wr = reg_wr;
 }
 
-int app_modbus_scanner_holding_reg_rd(uint16_t addr, uint16_t *reg)
+int app_modbus_scanner_input_reg_rd(uint16_t addr, uint16_t *reg)
 {
 	uint16_t holding_addr;
 	int ret;
@@ -71,12 +74,12 @@ int app_modbus_scanner_holding_reg_rd(uint16_t addr, uint16_t *reg)
 		return -EINVAL;
 	}
 
-	if (addr >= APP_MODBUS_SCANNER_REG_COUNT) {
+	if (addr >= APP_MODBUS_SCANNER_INPUT_REG_COUNT) {
 		update_access_diag(addr, false, -ENOTSUP);
 		return -ENOTSUP;
 	}
 
-	ret = scanner_map_rd(addr, &holding_addr);
+	ret = scanner_map_rd(APP_MB_HREG_SCANNER_INPUT_MAP_BASE, addr, &holding_addr);
 	if (ret < 0) {
 		update_access_diag(addr, false, ret);
 		return ret;
@@ -84,7 +87,7 @@ int app_modbus_scanner_holding_reg_rd(uint16_t addr, uint16_t *reg)
 
 	if (holding_addr == APP_MB_SCAN_MAP_FREE) {
 		k_mutex_lock(&scanner_local_regs_lock, K_FOREVER);
-		*reg = scanner_local_regs[addr];
+		*reg = input_local_regs[addr];
 		k_mutex_unlock(&scanner_local_regs_lock);
 		update_access_diag(addr, false, 0);
 		return 0;
@@ -96,17 +99,17 @@ int app_modbus_scanner_holding_reg_rd(uint16_t addr, uint16_t *reg)
 	return ret;
 }
 
-int app_modbus_scanner_holding_reg_wr(uint16_t addr, uint16_t reg)
+int app_modbus_scanner_output_reg_wr(uint16_t addr, uint16_t reg)
 {
 	uint16_t holding_addr;
 	int ret;
 
-	if (addr >= APP_MODBUS_SCANNER_REG_COUNT) {
+	if (addr >= APP_MODBUS_SCANNER_OUTPUT_REG_COUNT) {
 		update_access_diag(addr, true, -ENOTSUP);
 		return -ENOTSUP;
 	}
 
-	ret = scanner_map_rd(addr, &holding_addr);
+	ret = scanner_map_rd(APP_MB_HREG_SCANNER_OUTPUT_MAP_BASE, addr, &holding_addr);
 	if (ret < 0) {
 		update_access_diag(addr, true, ret);
 		return ret;
@@ -114,14 +117,47 @@ int app_modbus_scanner_holding_reg_wr(uint16_t addr, uint16_t reg)
 
 	if (holding_addr == APP_MB_SCAN_MAP_FREE) {
 		k_mutex_lock(&scanner_local_regs_lock, K_FOREVER);
-		scanner_local_regs[addr] = reg;
+		output_local_regs[addr] = reg;
 		k_mutex_unlock(&scanner_local_regs_lock);
 		update_access_diag(addr, true, 0);
 		return 0;
 	}
 
-	ret = unit1_reg_wr ? unit1_reg_wr(holding_addr, reg) : -ENODEV;
+	/* A cyclic output image keeps APPLY at zero until the PLC commits it. */
+	if ((holding_addr == APP_MB_HREG_MOTOR_APPLY) && (reg == 0U)) {
+		ret = 0;
+	} else {
+		ret = unit1_reg_wr ? unit1_reg_wr(holding_addr, reg) : -ENODEV;
+	}
 
 	update_access_diag(addr, true, ret);
 	return ret;
+}
+
+int app_modbus_scanner_holding_reg_rd(uint16_t addr, uint16_t *reg)
+{
+	if (!reg) {
+		return -EINVAL;
+	}
+
+	if (addr >= APP_MODBUS_SCANNER_REG_COUNT) {
+		return -ENOTSUP;
+	}
+
+	k_mutex_lock(&scanner_local_regs_lock, K_FOREVER);
+	*reg = legacy_local_regs[addr];
+	k_mutex_unlock(&scanner_local_regs_lock);
+	return 0;
+}
+
+int app_modbus_scanner_holding_reg_wr(uint16_t addr, uint16_t reg)
+{
+	if (addr >= APP_MODBUS_SCANNER_REG_COUNT) {
+		return -ENOTSUP;
+	}
+
+	k_mutex_lock(&scanner_local_regs_lock, K_FOREVER);
+	legacy_local_regs[addr] = reg;
+	k_mutex_unlock(&scanner_local_regs_lock);
+	return 0;
 }

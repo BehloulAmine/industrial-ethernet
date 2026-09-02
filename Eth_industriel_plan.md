@@ -554,19 +554,33 @@ EtherNet/IP, Web et LCD. Une lecture cyclique externe ne déclenche donc pas une
   données moteur. Le contrat moteur partagé définit les champs ; le mapping Modbus les associe à
   des adresses.
 - Conserver la signature `APP_MODBUS_MAP_SIGNATURE = 0x0747` et incrémenter
-  `APP_MODBUS_MAP_VERSION` à `2` car le contrat public évolue.
+  `APP_MODBUS_MAP_VERSION` à `4` car le contrat public évolue. Le bloc moteur
+  Unit-ID 1 est organisé ainsi : mode `REG10`, mot de contrôle `REG11`,
+  applique `REG12`, consigne `REG13`, rampes `REG14..15` et timeout
+  `REG16`.
 - Réserver deux zones Modbus distinctes, avec contrôle des droits :
   - Holding Registers moteur : écritures de commande (`control word`, consigne PWM, rampes, mode,
     timeout, séquence) ;
-  - Input Registers moteur : état en lecture seule issu du cache M7 (état, PWM appliqué,
+  - Holding Registers état moteur : état en lecture seule issu du cache M7 (état, PWM appliqué,
     direction, défaut, potentiomètre, heartbeat, âge de l'état et séquence acquittée).
-- Garder les registres de configuration réseau sous responsabilité M7. Réserver ou revoir la
-  fenêtre scanner Unit-ID 2 afin qu'elle ne permette jamais d'écrire un registre d'état moteur
-  en lecture seule ; définir explicitement son mapping par défaut après ce changement.
-- EtherNet/IP : utiliser l'Assembly 100 comme image de sortie PLC/commande et l'Assembly 101 comme
-  image d'entrée PLC/état. Supprimer leur miroir actuel sur la fenêtre scanner. Aligner leurs mots
-  sur le contrat moteur sans les confondre avec les adresses Modbus ; conserver l'ordre little-endian
-  CIP.
+- Garder les registres de configuration réseau sous responsabilité M7. Remplacer la fenêtre scanner
+  unique de dix mots par deux scanners directionnels de cinq mots :
+  - **Input scanner** : `REG40..44` contiennent son mapping ; Unit-ID 2, FC3/FC4 et FC23 le lisent.
+    Il est lecture seule pour le client. Par défaut, slot 0 pointe vers le code défaut moteur
+    (`REG24`) et slot 1 vers la consigne réellement appliquée (`REG21`) ; les autres slots sont
+    libres (`0xffff`).
+  - **Output scanner** : `REG45..49` contiennent son mapping ; Unit-ID 2, FC6/FC16 et FC23
+    l'écrivent. Par défaut, slot 0 pointe vers le mot de contrôle moteur (`REG11`), slot 1 vers la
+    consigne (`REG13`) et slot 2 vers `REG12` (`APPLY`) afin qu'un PLC puisse valider atomiquement
+    une commande complète. Les deux derniers slots sont libres (`0xffff`).
+  - Les valeurs locales de repli sont séparées et privées à chaque scanner. Toute cible de mapping
+    invalide ou en lecture seule est refusée à l'écriture ; l'input scanner ne permet jamais une
+    écriture indirecte dans l'état M4.
+  - Le même Unit-ID `2` est conservé : une lecture donne toujours l'image Input et une écriture
+    agit toujours sur l'image Output. FC23 écrit l'image Output avant de relire l'image Input.
+- EtherNet/IP : réduire les assemblies à cinq mots et les relier directement aux deux scanners :
+  Assembly 100 = Output scanner (commande PLC), Assembly 101 = Input scanner (état PLC).
+  Conserver l'ordre little-endian CIP et les droits directionnels identiques à Modbus.
 - Web/REST : ajouter `/api/motor/state` et `/api/motor/command`, une vue moteur avec source,
   consigne, PWM appliqué, direction, défaut et âge du cache. Une écriture répond que la commande a
   été mise en file ; l'état et la séquence acquittée confirment ensuite son application par le M4.
